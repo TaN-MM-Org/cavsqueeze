@@ -67,6 +67,26 @@ best = optimal_squeezing(p, homogeneous(N), 1e-6, 1e-2)
 print(10*np.log10(best["xi2"]), "dB at", best["t"], "s")
 ```
 
+## Metrology projections
+
+The `metrology` module turns the solver's collective moments into the
+quantities an experiment is designed against, for any platform the solver
+can describe: Kitagawa-Ueda and Wineland squeezing parameters, single-shot
+phase sensitivity, the projection-noise-limited Allan deviation of a Ramsey
+clock, and the field sensitivity of a Ramsey magnetometer.
+
+```python
+from cavsqueeze import (squeezing_parameters, clock_allan_deviation,
+                        metrological_gain_db)
+m = squeezing_parameters(state, ens.n)          # xi2_S, xi2_R, contrast, dphi
+print(metrological_gain_db(m["xi2_R"]), "dB over the SQL")
+print(clock_allan_deviation(m["dphi"], nu0=4.29e14, T_ramsey=0.1, tau=1.0))
+```
+
+The formulas are the standard ones (Kitagawa-Ueda 1993; Wineland 1992;
+Itano 1993; Ludlow RMP 2015) and are tested against the solver's own exact
+references and closed-form limits.
+
 ## Associated paper
 
 The physics, the conventions and the validation of this package are described

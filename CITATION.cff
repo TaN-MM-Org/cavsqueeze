@@ -12,7 +12,7 @@ authors:
   - family-names: Mohsin
     given-names: Abu S. M.
     affiliation: BRAC University
-version: 1.7.0
+version: 1.8.0
 date-released: 2026-09-03
 license: Apache-2.0
 repository-code: https://github.com/TaN-MM-Org/cavsqueeze
