@@ -87,6 +87,23 @@ The formulas are the standard ones (Kitagawa-Ueda 1993; Wineland 1992;
 Itano 1993; Ludlow RMP 2015) and are tested against the solver's own exact
 references and closed-form limits.
 
+## Into the bosonic quantum stack
+
+The `interop` module extracts the Holstein-Primakoff mode of the collective
+spin from any solver state: the 2x2 Gaussian quadrature covariance (a
+coherent spin state maps to the vacuum), its symplectic eigenvalue,
+squeezing parameter, angle, thermal occupation and purity, and an export to
+a QuTiP density matrix that reproduces that covariance. The export verifies
+itself against the target covariance so Fock truncation can never silently
+corrupt it, and the QuTiP squeeze-phase convention is locked by a test
+rather than assumed.
+
+```python
+from cavsqueeze import bosonic_mode, to_qutip
+mode = bosonic_mode(state, ens.n)     # Sigma, nu, r, theta, n_th, purity
+rho, mode = to_qutip(state, ens.n)    # QuTiP density matrix of the mode
+```
+
 ## Associated paper
 
 The physics, the conventions and the validation of this package are described
