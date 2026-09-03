@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper."
+title: "cavsqueeze: beyond-mean-field cavity-mediated spin squeezing for solid-state clock-transition ensembles"
+authors:
+  - family-names: Mahim
+    given-names: Tanvir M.
+    affiliation: BRAC University
+  - family-names: Rahman
+    given-names: M. Mosaddequr
+    affiliation: BRAC University
+  - family-names: Mohsin
+    given-names: Abu S. M.
+    affiliation: BRAC University
+version: 1.7.0
+date-released: 2026-09-03
+license: Apache-2.0
+repository-code: https://github.com/TaN-MM-Org/cavsqueeze
