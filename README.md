@@ -3,6 +3,7 @@
 [![Tests](https://github.com/TaN-MM-Org/cavsqueeze/actions/workflows/tests.yml/badge.svg)](https://github.com/TaN-MM-Org/cavsqueeze/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/cavsqueeze)](https://pypi.org/project/cavsqueeze/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22278035-blue)](https://doi.org/10.5281/zenodo.22278035)
 
 Beyond-mean-field simulation of cavity-mediated spin squeezing (one-axis
 twisting) for solid-state clock-transition ensembles, and of squeezing by
