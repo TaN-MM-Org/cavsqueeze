@@ -85,7 +85,15 @@ print(clock_allan_deviation(m["dphi"], nu0=4.29e14, T_ramsey=0.1, tau=1.0))
 
 The formulas are the standard ones (Kitagawa-Ueda 1993; Wineland 1992;
 Itano 1993; Ludlow RMP 2015) and are tested against the solver's own exact
-references and closed-form limits.
+references and closed-form limits. `oat_closed_form` (v1.10) provides the
+exact unitary Kitagawa-Ueda one-axis-twisting moments -- mean spin,
+extremal transverse variances, optimal angle and both squeezing
+parameters -- as the decoherence-free benchmark the dissipative solver
+is compared against; every returned quantity is asserted against
+brute-force exact evolution in the tests. The pulse-sequence layer
+(`css_x`, `twist`, `twist_untwist`, `optimal_squeezing`,
+`plain_squeezed_readout`, ...) is exported at the package root as of
+v1.10.
 
 ## Into the bosonic quantum stack
 
