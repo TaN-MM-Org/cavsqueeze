@@ -107,3 +107,47 @@ def magnetometer_sensitivity(dphi: float, gamma: float, T_ramsey: float,
     if Tc < T_ramsey:
         raise ValueError("T_cycle must be at least T_ramsey")
     return float(dphi / (gamma * T_ramsey) * np.sqrt(Tc / tau))
+
+
+def oat_closed_form(N: int, mu: float):
+    """Exact unitary one-axis-twisting moments (Kitagawa and Ueda,
+    Phys. Rev. A 47, 5138 (1993)) for N spin-1/2 particles prepared in
+    the coherent spin state along +x and evolved by U = exp(-i mu/2
+    Jz^2) -- i.e. mu = 2 chi t for H = chi Jz^2.
+
+    With A = 1 - cos^{N-2}(mu) and B = 4 sin(mu/2) cos^{N-2}(mu/2),
+
+        <Jx>     = (N/2) cos^{N-1}(mu/2)
+        <Jz^2>   = N/4                    (Jz is conserved)
+        V(+/-)   = N/4 + N(N-1)/16 [A +/- sqrt(A^2 + B^2)]
+
+    are exact for all N and mu; every one of these lines is asserted
+    against brute-force exact evolution in the tests rather than
+    trusted. Decoherence-free and homogeneous by construction: this is
+    the benchmark the dissipative cumulant solver is compared against,
+    not a substitute for it.
+
+    Returns dict(Jx, Vmin, Vmax, alpha_min, xi2_S, xi2_R) where
+    alpha_min is the transverse angle of the minimal variance
+    (J(alpha) = cos(alpha) Jy + sin(alpha) Jz), xi2_S = Vmin/(N/4) the
+    Kitagawa-Ueda parameter and xi2_R the Wineland parameter
+    xi2_S (N/2)^2 / <Jx>^2.
+    """
+    N = int(N)
+    if N < 2:
+        raise ValueError("one-axis twisting needs N >= 2 spins")
+    mu = float(mu)
+    c, s = np.cos(mu / 2.0), np.sin(mu / 2.0)
+    A = 1.0 - np.cos(mu) ** (N - 2)
+    B = 4.0 * s * c ** (N - 2)
+    rad = np.sqrt(A * A + B * B)
+    pref = N * (N - 1) / 16.0
+    Vmin = N / 4.0 + pref * (A - rad)
+    Vmax = N / 4.0 + pref * (A + rad)
+    Jx = (N / 2.0) * c ** (N - 1)
+    alpha_min = 0.5 * np.arctan2(-B, -A)
+    xi2_S = Vmin / (N / 4.0)
+    xi2_R = xi2_S * (N / 2.0) ** 2 / Jx ** 2 if Jx != 0.0 else np.inf
+    return dict(Jx=Jx, Vmin=float(Vmin), Vmax=float(Vmax),
+                alpha_min=float(alpha_min), xi2_S=float(xi2_S),
+                xi2_R=float(xi2_R))
