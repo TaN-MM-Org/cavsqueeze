@@ -9,5 +9,6 @@ from .cumulant import Rates, State, product_state, rotate, evolve, evolve_meanfi
 from .protocols import (css_x, optimal_squeezing, plain_squeezed_readout, pulse,
                         ramsey_cumulant, ramsey_meanfield, squeezing_after,
                         squeezing_trace, twist, twist_imperfect, twist_untwist)
+from .measured import SqueezingEstimate, estimate_squeezing, variance_tomography
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
