@@ -95,6 +95,39 @@ brute-force exact evolution in the tests. The pulse-sequence layer
 `plain_squeezed_readout`, ...) is exported at the package root as of
 v1.10.
 
+## Squeezing from measured count data (new in v1.11)
+
+Every other module predicts squeezing from a model; `estimate_squeezing`
+estimates it from an experiment. Feed it the standard Ramsey tomography
+record -- per-angle shot arrays of the measured population difference
+J_z = (N_up - N_down)/2 -- plus the atom number and the fringe
+contrast, and it returns Kitagawa-Ueda and Wineland parameters with
+honest uncertainties. The fit leans only on exact structure: the
+rotation law of a 2x2 covariance makes V(theta) = c + a cos 2theta
++ b sin 2theta *exactly* (no Gaussian assumption), so the tomography
+fit is closed-form weighted linear least squares, and
+V_min = c - sqrt(a^2 + b^2) is an eigenvalue identity asserted against
+`numpy.linalg.eigvalsh`. The single Gaussian assumption (the exact
+2 s^4/(M-1) sample-variance error bar) is stated, not hidden. A known
+detection variance can be subtracted per angle -- opt-in, recorded in
+the result, and refused with an explanation when it over-subtracts
+into unphysical territory.
+
+```python
+from cavsqueeze import estimate_squeezing, metrological_gain_db
+est = estimate_squeezing(angles, shots, N=480, contrast=0.92,
+                         contrast_sigma=0.01, detection_variance=v_det)
+print(est.xi2_R, "+/-", est.xi2_R_sigma,
+      "->", metrological_gain_db(est.xi2_R), "dB")
+```
+
+Anchors in the tests: exact covariance recovery with eigenvalues from
+an independent numpy path; the exact Kitagawa-Ueda one-axis-twisting
+closed form recovered from sampled shots; a coherent-spin-state
+sample estimating the standard quantum limit xi2_R = 1; Monte-Carlo
+scatter matching the reported sigma; the detection-noise round trip;
+and degenerate-design refusals.
+
 ## Into the bosonic quantum stack
 
 The `interop` module extracts the Holstein-Primakoff mode of the collective

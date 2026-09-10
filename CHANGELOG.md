@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.11.0 (2026-09-10)
+
+### Added
+
+- `estimate_squeezing` / `SqueezingEstimate` / `variance_tomography`:
+  squeezing estimation from measured Ramsey-tomography count data.
+  Exact-WLS fit of the rotation law V(theta) = c + a cos 2theta
+  + b sin 2theta (a covariance transformation identity, not a
+  Gaussian assumption), closed-form extremal variances and dip
+  angle, delta-method uncertainties through the exact WLS
+  covariance, the stated-not-hidden Gaussian sample-variance error
+  bar 2 s^4/(M-1), opt-in detection-noise subtraction with an
+  over-subtraction refusal, and Kitagawa-Ueda / Wineland parameters
+  in exactly the solver's `wineland_xi2` convention.
+- Anchors: covariance recovery against `numpy.linalg.eigvalsh`; the
+  exact one-axis-twisting closed form (`oat_closed_form`) recovered
+  from sampled tomography shots; the standard quantum limit from a
+  coherent-spin-state sample; Monte-Carlo scatter matching the
+  reported sigma; detection-noise round trip; degenerate-design
+  refusals.
+
 ## 1.10.0 (2026-09-05)
 
 ### Added
