@@ -18,5 +18,5 @@ license: Apache-2.0
 repository-code: https://github.com/TaN-MM-Org/cavsqueeze
 identifiers:
   - type: doi
-    value: 10.5281/zenodo.22278035
+    value: 10.5281/zenodo.22278034
     description: "Concept DOI for all versions; resolves to the latest release"

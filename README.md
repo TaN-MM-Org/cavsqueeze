@@ -3,7 +3,7 @@
 [![Tests](https://github.com/TaN-MM-Org/cavsqueeze/actions/workflows/tests.yml/badge.svg)](https://github.com/TaN-MM-Org/cavsqueeze/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/cavsqueeze?label=PyPI&color=blue)](https://pypi.org/project/cavsqueeze/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22278035-blue)](https://doi.org/10.5281/zenodo.22278035)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22278034-blue)](https://doi.org/10.5281/zenodo.22278034)
 
 Simulate **spin squeezing** -- the quantum trick that lets an ensemble
 of spins measure better than its atom number alone allows -- for
