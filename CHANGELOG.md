@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.12.0 (2026-09-12)
+
+Experimental-workflow release: the two loose ends of the measured-data
+path are closed, so a squeezing estimate needs no hand-entered inputs
+beyond the atom number.
+
+### Added
+
+- `estimate_contrast` / `ContrastEstimate`: the Ramsey fringe
+  contrast fitted from a phase-scan shot record -- the number
+  `estimate_squeezing` previously asked the user to bring from their
+  own fringe fit. The mean fringe obeys A cos phi + B sin phi + d
+  exactly (the rotation law of the mean spin, no lineshape
+  assumption), so the fit is closed-form weighted linear least
+  squares with per-phase standard errors, and the contrast
+  uncertainty follows by the delta method through the exact WLS
+  covariance -- the same structure and honesty as
+  `variance_tomography`. Refusals: fewer than 3 distinct phases
+  modulo 2 pi, and a fitted contrast above 1 beyond its uncertainty
+  (reported as a probable N or J_z-calibration problem, never
+  clipped silently; a small statistical overshoot is returned as
+  data, with the deliberate rounding left to the user).
+- `save_shots_csv` / `load_shots_csv`: a documented plain-text
+  contract (`angle_rad,jz`, one row per shot; ragged per-angle shot
+  counts allowed) serving both tomography and fringe records, with
+  exact round trips and refusals for malformed files and
+  single-shot angles.
+- Anchors: exact fringe recovery on clean records; Monte-Carlo
+  scatter matching the reported contrast sigma; both refusals; exact
+  file round trips; and the complete file-to-estimate pipeline
+  recovering the standard quantum limit on a coherent-spin-state
+  record with no hand-entered contrast.
+
 ## 1.11.0 (2026-09-10)
 
 ### Added

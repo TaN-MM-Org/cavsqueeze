@@ -5,10 +5,16 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22278035-blue)](https://doi.org/10.5281/zenodo.22278035)
 
-Beyond-mean-field simulation of cavity-mediated spin squeezing (one-axis
-twisting) for solid-state clock-transition ensembles, and of squeezing by
-measurement of the spin population through the resonator. Developed for
-171Yb3+:CaWO4 and applicable to any spin ensemble coupled to a resonator.
+Simulate **spin squeezing** -- the quantum trick that lets an ensemble
+of spins measure better than its atom number alone allows -- for
+spins coupled to a resonator, with the imperfections a real solid
+brings: frequency disorder, decay, thermal photons and uneven
+coupling. The solver's cost is set by the line shape, not the spin
+count, so a quadrillion spins are no harder than a thousand. It also
+works backward from experiment: measured shot records go in,
+squeezing parameters with honest error bars come out. Developed for
+171Yb3+:CaWO4 and applicable to any spin ensemble coupled to a
+resonator.
 
 `cavsqueeze` implements
 
@@ -95,7 +101,7 @@ brute-force exact evolution in the tests. The pulse-sequence layer
 `plain_squeezed_readout`, ...) is exported at the package root as of
 v1.10.
 
-## Squeezing from measured count data (new in v1.11)
+## Squeezing from measured count data (v1.11-v1.12)
 
 Every other module predicts squeezing from a model; `estimate_squeezing`
 estimates it from an experiment. Feed it the standard Ramsey tomography
@@ -121,12 +127,39 @@ print(est.xi2_R, "+/-", est.xi2_R_sigma,
       "->", metrological_gain_db(est.xi2_R), "dB")
 ```
 
+New in v1.12, the two loose ends of that workflow are closed:
+
+- `estimate_contrast` fits the Ramsey fringe contrast -- the number
+  `estimate_squeezing` previously asked you to bring from your own
+  fringe fit -- from a phase-scan shot record, by the same exact
+  linear-least-squares structure (the mean fringe is exactly
+  A cos phi + B sin phi + d), with an uncertainty that feeds
+  `contrast_sigma` directly. A fitted contrast significantly above 1
+  is refused with the likely cause (wrong N, or a J_z calibration
+  problem) rather than clipped.
+- `save_shots_csv` / `load_shots_csv` give both shot records
+  (tomography and fringe scans -- the same data shape) a documented
+  plain-text contract (`angle_rad,jz`, one row per shot) with an
+  exact round trip and refusals for malformed files.
+
+```python
+phases, fringe = cavsqueeze.load_shots_csv("fringe.csv")
+cest = cavsqueeze.estimate_contrast(phases, fringe, N=480)
+angles, shots = cavsqueeze.load_shots_csv("tomography.csv")
+est = cavsqueeze.estimate_squeezing(angles, shots, N=480,
+                                    contrast=cest.contrast,
+                                    contrast_sigma=cest.contrast_sigma)
+```
+
 Anchors in the tests: exact covariance recovery with eigenvalues from
 an independent numpy path; the exact Kitagawa-Ueda one-axis-twisting
 closed form recovered from sampled shots; a coherent-spin-state
-sample estimating the standard quantum limit xi2_R = 1; Monte-Carlo
-scatter matching the reported sigma; the detection-noise round trip;
-and degenerate-design refusals.
+sample estimating the standard quantum limit xi2_R = 1 through the
+complete file-to-estimate pipeline with no hand-entered contrast;
+Monte-Carlo scatter matching the reported sigmas in both fitters;
+exact fringe recovery on clean records; the detection-noise round
+trip; exact file round trips; and degenerate-design refusals in both
+fitters.
 
 ## Into the bosonic quantum stack
 
