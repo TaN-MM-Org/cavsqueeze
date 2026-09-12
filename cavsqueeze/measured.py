@@ -69,7 +69,8 @@ import dataclasses
 import numpy as np
 
 __all__ = ["SqueezingEstimate", "estimate_squeezing",
-           "variance_tomography"]
+           "variance_tomography", "ContrastEstimate",
+           "estimate_contrast"]
 
 
 @dataclasses.dataclass
@@ -157,6 +158,118 @@ def variance_tomography(angles, variances, variance_sigmas):
     return dict(c=c, a=a, b=b, cov=cov, var_min=var_min,
                 var_max=var_max, var_min_sigma=var_min_sigma,
                 theta_min=theta_min, V1=c + a, V2=c - a, C12=b)
+
+
+@dataclasses.dataclass
+class ContrastEstimate:
+    """Ramsey fringe contrast fitted from a phase scan.
+
+    contrast, contrast_sigma : the fringe contrast C in (0, 1] and
+        its one-standard-deviation uncertainty -- exactly the two
+        numbers `estimate_squeezing` asks for.
+    phi0 : fitted fringe phase (radians).
+    offset, offset_sigma : fitted constant offset of the mean J_z
+        (spin units; nonzero offsets usually mean an imbalanced
+        detection calibration, worth knowing about).
+    amplitude : fitted fringe amplitude N C / 2 (spin units).
+    cov_abd : (3, 3) WLS covariance of the (A, B, d) linear fit.
+    n_phases, shots_per_phase : data bookkeeping.
+    """
+
+    contrast: float
+    contrast_sigma: float
+    phi0: float
+    offset: float
+    offset_sigma: float
+    amplitude: float
+    cov_abd: np.ndarray
+    n_phases: int
+    shots_per_phase: np.ndarray
+
+
+def estimate_contrast(phases, shots, N) -> ContrastEstimate:
+    """Fit the Ramsey fringe contrast from a phase-scan record --
+    closing the loop `estimate_squeezing`'s docstring leaves open
+    (new in v1.12).
+
+    The record is the same shape as the tomography record: per-phase
+    shot arrays of measured J_z, but scanned over the FRINGE phase
+    (the final pi/2 pulse phase over a full period) rather than the
+    tomography angle. The mean obeys
+
+        <J_z>(phi) = A cos phi + B sin phi + d
+
+    exactly (the rotation law of the mean spin, no lineshape
+    assumption), so the fit is closed-form weighted linear least
+    squares with per-phase standard errors of the mean, and the
+    contrast is C = 2 sqrt(A^2 + B^2) / N with its uncertainty by the
+    delta method through the exact WLS covariance -- the same
+    structure, and the same honesty, as `variance_tomography`.
+
+    Refusals instead of guesses: fewer than 3 distinct phases modulo
+    2 pi (three basis functions need three quadratures), and a fitted
+    contrast significantly above 1 (C - 2 sigma_C > 1), which is
+    unphysical and usually means N is wrong or the J_z calibration is
+    off -- reported as the likely cause rather than clipped.
+
+    phases : (K,) fringe phases (radians).
+    shots : length-K sequence of per-phase shot arrays (each >= 2), or
+        a (K, M) array; measured J_z in spin units.
+    N : number of spins (sets the normalization C = 2 |amplitude| / N).
+    """
+    ph = np.asarray(phases, dtype=float).ravel()
+    rows = [np.asarray(s, dtype=float).ravel() for s in shots]
+    if len(rows) != ph.size:
+        raise ValueError("need one shot array per phase")
+    if any(r.size < 2 for r in rows):
+        raise ValueError("need at least 2 shots per phase")
+    if any(not np.all(np.isfinite(r)) for r in rows):
+        raise ValueError("shots contain non-finite values")
+    if not np.all(np.isfinite(ph)):
+        raise ValueError("phases must be finite")
+    if not (isinstance(N, (int, np.integer)) and N >= 2):
+        raise ValueError("N must be an integer >= 2")
+    M = np.array([r.size for r in rows])
+    mean = np.array([float(r.mean()) for r in rows])
+    sem = np.array([float(r.std(ddof=1)) / np.sqrt(r.size)
+                    for r in rows])
+    if np.any(sem <= 0.0):
+        raise ValueError("a per-phase shot array has zero scatter; "
+                         "identical shots carry no error information")
+    X = np.column_stack([np.cos(ph), np.sin(ph), np.ones_like(ph)])
+    w = 1.0 / sem
+    Xw = X * w[:, None]
+    Amat = Xw.T @ Xw
+    sv = np.linalg.svd(Amat, compute_uv=False)
+    if sv[-1] <= 1e-10 * sv[0]:
+        raise ValueError(
+            "fringe phases are degenerate modulo 2 pi (fewer than 3 "
+            "distinct quadratures); spread the phases over the fringe")
+    abd = np.linalg.solve(Amat, Xw.T @ (mean * w))
+    cov = np.linalg.inv(Amat)
+    A, B, d = (float(x) for x in abd)
+    r = float(np.hypot(A, B))
+    C = 2.0 * r / N
+    if r > 0.0:
+        g = np.array([A / r, B / r, 0.0])
+    else:
+        g = np.array([1.0, 0.0, 0.0])
+    C_sigma = 2.0 * float(np.sqrt(g @ cov @ g)) / N
+    if C - 2.0 * C_sigma > 1.0:
+        raise ValueError(
+            f"fitted contrast {C:.4f} +/- {C_sigma:.4f} exceeds 1 "
+            "beyond its uncertainty, which is unphysical: N is "
+            "probably wrong, or the J_z calibration is off. Check "
+            "both rather than clipping the contrast")
+    # the fitted value is returned unclipped: a small statistical
+    # overshoot above 1 is data, and rounding it down is the USER's
+    # deliberate step before feeding estimate_squeezing (which
+    # requires C <= 1), not this function's silent one
+    return ContrastEstimate(
+        contrast=float(C), contrast_sigma=float(C_sigma),
+        phi0=float(np.arctan2(B, A)), offset=float(d),
+        offset_sigma=float(np.sqrt(cov[2, 2])), amplitude=float(r),
+        cov_abd=cov, n_phases=int(ph.size), shots_per_phase=M)
 
 
 def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
