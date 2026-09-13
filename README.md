@@ -91,24 +91,28 @@ print(clock_allan_deviation(m["dphi"], nu0=4.29e14, T_ramsey=0.1, tau=1.0))
 
 The formulas are the standard ones (Kitagawa-Ueda 1993; Wineland 1992;
 Itano 1993; Ludlow RMP 2015) and are tested against the solver's own exact
-references and closed-form limits. New in v1.13, the **Dick effect** --
-the local-oscillator aliasing floor that decides whether squeezing helps
-a clock at all (Schulte et al., Nat. Commun. 2020) -- is computed from
-your laser's measured noise PSD via the exact closed-form Fourier
-coefficients of the Ramsey sensitivity function, and
-`total_clock_allan_deviation` returns an explicit `dick_limited`
-verdict, so the projection-noise gain the solver predicts can be
-compared honestly against the floor no entanglement moves. `oat_closed_form` (v1.10) provides the
-exact unitary Kitagawa-Ueda one-axis-twisting moments -- mean spin,
-extremal transverse variances, optimal angle and both squeezing
-parameters -- as the decoherence-free benchmark the dissipative solver
-is compared against; every returned quantity is asserted against
-brute-force exact evolution in the tests. The pulse-sequence layer
-(`css_x`, `twist`, `twist_untwist`, `optimal_squeezing`,
-`plain_squeezed_readout`, ...) is exported at the package root as of
-v1.10.
+references and closed-form limits.
 
-## Squeezing from measured count data (v1.11-v1.12)
+New in v1.13, the **Dick effect** is included: a clock's local
+oscillator is only sampled part of the time, and the noise it sneaks
+in during the dead time sets a stability floor that no amount of
+squeezing moves (Schulte et al., Nat. Commun. 2020). The floor is
+computed from your laser's measured noise spectrum through the exact
+closed-form Fourier coefficients of the Ramsey timing sequence, and
+`total_clock_allan_deviation` combines it with the projection noise
+and says plainly, via its `dick_limited` verdict, whether squeezing
+or the laser currently limits the clock.
+
+`oat_closed_form` provides the exact unitary one-axis-twisting
+moments -- mean spin, extremal transverse variances, optimal angle
+and both squeezing parameters -- as the decoherence-free benchmark
+the dissipative solver is compared against; every returned quantity
+is asserted against brute-force exact evolution in the tests. The
+pulse-sequence layer (`css_x`, `twist`, `twist_untwist`,
+`optimal_squeezing`, `plain_squeezed_readout`, ...) is exported at
+the package root.
+
+## Squeezing from measured count data
 
 Every other module predicts squeezing from a model; `estimate_squeezing`
 estimates it from an experiment. Feed it the standard Ramsey tomography
@@ -134,7 +138,7 @@ print(est.xi2_R, "+/-", est.xi2_R_sigma,
       "->", metrological_gain_db(est.xi2_R), "dB")
 ```
 
-New in v1.12, the two loose ends of that workflow are closed:
+Two helpers close the loop from raw files to the estimate:
 
 - `estimate_contrast` fits the Ramsey fringe contrast -- the number
   `estimate_squeezing` previously asked you to bring from your own
@@ -184,6 +188,21 @@ from cavsqueeze import bosonic_mode, to_qutip
 mode = bosonic_mode(state, ens.n)     # Sigma, nu, r, theta, n_th, purity
 rho, mode = to_qutip(state, ens.n)    # QuTiP density matrix of the mode
 ```
+
+## How it is checked
+
+57 tests (plus 3 that skip here because they compare against the
+paper's companion scripts, which live in that repository), on
+Python 3.10-3.13, run in CI on every push. Every physics claim is
+pinned to an exact reference, never a stored number: the cumulant
+solver against exact QuTiP and PIQS references and closed-form
+limits; the independent discrete truncated Wigner solver as a
+cross-check; the one-axis-twisting closed form against brute-force
+exact evolution; the estimators recovering generating parameters
+with Monte-Carlo scatter matching their reported error bars; the
+Dick coefficients against independent numerical quadrature, with
+exact zero for continuous interrogation and the exact
+rectangular-window ratio; and exact file-contract round trips.
 
 ## Associated paper
 
