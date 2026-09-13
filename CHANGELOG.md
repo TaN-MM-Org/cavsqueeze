@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.13.0 (2026-09-13)
+
+Physics upgrade from the clock literature: the Dick effect -- the
+local-oscillator aliasing floor that decides whether squeezing helps
+a clock at all, the central caveat of Schulte et al., Nat. Commun.
+11, 5955 (2020), and the regime today's spin-squeezed lattice-clock
+comparisons engineer around (Robinson et al., Nat. Phys. 2024).
+
+### Added
+
+- `dick_allan_deviation` / `dick_fourier_coefficients` /
+  `ramsey_sensitivity`: the Dick-limited fractional-frequency Allan
+  deviation, sigma_y^2 = (1/(tau g0^2)) sum |g_m|^2 S_y(m/Tc)
+  (Dick 1987; Santarelli et al., IEEE UFFC 45, 887 (1998); the
+  convention of Quessada et al., J. Opt. B 5, S150 (2003)), with the
+  standard on-resonance Ramsey sensitivity function (sin-shaped
+  pi/2-pulse edges, unity free evolution, dead time) and its Fourier
+  coefficients in exact closed form per segment. The harmonic-cutoff
+  truncation is checked, not hoped for: a cutoff whose last decade
+  still carries weight is refused.
+- `power_law_psd`: the standard h0 + h_-1/f + h_-2/f^2 clock-laser
+  PSD as a callable -- YOUR laser's measured coefficients; none are
+  shipped.
+- `total_clock_allan_deviation`: projection noise (where squeezing
+  enters) and the Dick floor (which no atom number or entanglement
+  moves) combined in quadrature, with an explicit `dick_limited`
+  verdict.
+
+### Anchors (asserted in `tests/test_dick.py`, not stated)
+
+- The closed-form Fourier coefficients equal independent adaptive
+  quadrature of the sampled sensitivity function to 1e-9 (two code
+  paths), for rectangular and finite-pulse cycles.
+- Continuous interrogation (zero dead time, negligible pulses) gives
+  exactly zero Dick noise -- every harmonic coefficient vanishes.
+- The short-pulse limit reproduces the exact rectangular-window ratio
+  sin(pi m eta)/(pi m eta) to 1e-12.
+- The floor scales exactly as 1/sqrt(tau); the cutoff-convergence
+  refusal fires; and the verdict test shows ~10 dB of squeezing
+  moving a quiet-LO clock by >3x while moving a Dick-limited clock
+  by <10%, with the Dick term itself identical in both cases.
+
 ## 1.12.0 (2026-09-12)
 
 Experimental-workflow release: the two loose ends of the measured-data

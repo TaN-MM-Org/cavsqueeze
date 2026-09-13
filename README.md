@@ -91,7 +91,14 @@ print(clock_allan_deviation(m["dphi"], nu0=4.29e14, T_ramsey=0.1, tau=1.0))
 
 The formulas are the standard ones (Kitagawa-Ueda 1993; Wineland 1992;
 Itano 1993; Ludlow RMP 2015) and are tested against the solver's own exact
-references and closed-form limits. `oat_closed_form` (v1.10) provides the
+references and closed-form limits. New in v1.13, the **Dick effect** --
+the local-oscillator aliasing floor that decides whether squeezing helps
+a clock at all (Schulte et al., Nat. Commun. 2020) -- is computed from
+your laser's measured noise PSD via the exact closed-form Fourier
+coefficients of the Ramsey sensitivity function, and
+`total_clock_allan_deviation` returns an explicit `dick_limited`
+verdict, so the projection-noise gain the solver predicts can be
+compared honestly against the floor no entanglement moves. `oat_closed_form` (v1.10) provides the
 exact unitary Kitagawa-Ueda one-axis-twisting moments -- mean spin,
 extremal transverse variances, optimal angle and both squeezing
 parameters -- as the decoherence-free benchmark the dissipative solver
