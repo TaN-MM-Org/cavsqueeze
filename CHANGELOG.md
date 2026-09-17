@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.14.0 (2026-09-17)
+
+Lab adaptability: the error bars of a tomography measurement,
+computed exactly before the measurement exists.
+
+- `lab.plan_tomography`: the planned design's exact weighted-least-
+  squares covariance -- the same matrix `variance_tomography` reports
+  -- from the angles, shot counts and expected variance scale alone,
+  with predicted error bars for var_min, xi2_S and xi2_R, and a
+  degenerate-angle verdict on the same arithmetic the estimator
+  refuses with.
+- `lab.shots_for_squeezing`: the smallest shot count meeting a target
+  Wineland error bar, by exact closed-form inversion (the tomography
+  term scales as 1/sqrt(M-1) exactly); a target below the exact
+  contrast floor xi2_R * 2 sigma_C / C is refused with the floor
+  named, because tomography shots cannot buy it.
+- Anchors: planned covariance equals the estimator's to machine
+  precision; K equally spaced angles give the exactly orthogonal
+  normal matrix diag(K, K/2, K/2); the shot inversion is verified on
+  both sides of the target; 300 seeded Monte-Carlo experiments match
+  the planned error bar; degenerate designs reported and refused
+  alike.
+
 ## 1.13.0 (2026-09-13)
 
 Physics upgrade from the clock literature: the Dick effect -- the

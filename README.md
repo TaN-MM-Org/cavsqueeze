@@ -172,6 +172,37 @@ exact fringe recovery on clean records; the detection-noise round
 trip; exact file round trips; and degenerate-design refusals in both
 fitters.
 
+## Planning the measurement before taking it
+
+The estimator closes the loop after the experiment; `plan_tomography`
+and `shots_for_squeezing` close it before. Because the tomography fit
+is linear, its covariance depends only on the design -- the angles,
+the shot counts and the expected variance scale -- so the error bars
+of a planned measurement can be computed exactly before any data
+exists, from the same matrix the estimator will report:
+
+```python
+import numpy as np
+from cavsqueeze import plan_tomography, shots_for_squeezing
+
+angles = np.linspace(0.0, np.pi, 9, endpoint=False)
+plan = plan_tomography(angles, shots_per_angle=50, var_min=90.0,
+                       var_max=160.0, N=480, contrast=0.92,
+                       contrast_sigma=0.01)
+print(plan["xi2_R_sigma"])          # the error bar you would get
+
+m, plan = shots_for_squeezing(0.02, angles, 90.0, 160.0, N=480,
+                              contrast=0.92, contrast_sigma=0.01)
+print(m, "shots per angle")         # the cheapest design meeting it
+```
+
+Two exact facts do the work: equally spaced angles over half a turn
+make the three fitted parameters exactly independent (no angle wastes
+shots on redundancy), and the contrast uncertainty puts a floor under
+the Wineland error bar that no number of tomography shots removes --
+a target below that floor is refused with the floor named, because
+only a better fringe measurement can buy it.
+
 ## Into the bosonic quantum stack
 
 The `interop` module extracts the Holstein-Primakoff mode of the collective
@@ -191,7 +222,7 @@ rho, mode = to_qutip(state, ens.n)    # QuTiP density matrix of the mode
 
 ## How it is checked
 
-57 tests (plus 3 that skip here because they compare against the
+63 tests (plus 3 that skip here because they compare against the
 paper's companion scripts, which live in that repository), on
 Python 3.10-3.13, run in CI on every push. Every physics claim is
 pinned to an exact reference, never a stored number: the cumulant
@@ -202,7 +233,11 @@ exact evolution; the estimators recovering generating parameters
 with Monte-Carlo scatter matching their reported error bars; the
 Dick coefficients against independent numerical quadrature, with
 exact zero for continuous interrogation and the exact
-rectangular-window ratio; and exact file-contract round trips.
+rectangular-window ratio; and exact file-contract round trips. The planner is held to the
+estimator itself: the planned covariance equals the fitted one to
+machine precision, the equal-spacing orthogonality is asserted as
+an exact identity, and seeded Monte-Carlo scatter matches the
+planned error bar.
 
 ## Associated paper
 
