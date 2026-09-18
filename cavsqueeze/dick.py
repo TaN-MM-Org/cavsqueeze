@@ -47,7 +47,7 @@ import numpy as np
 
 __all__ = ["ramsey_sensitivity", "dick_fourier_coefficients",
            "dick_allan_deviation", "total_clock_allan_deviation",
-           "power_law_psd"]
+           "power_law_psd", "synchronized_comparison"]
 
 
 def _seg_E(k, t1, t2):
@@ -195,3 +195,45 @@ def total_clock_allan_deviation(dphi, nu0, T_ramsey, tau, T_cycle,
     return dict(qpn=float(qpn), dick=float(dick),
                 total=float(np.hypot(qpn, dick)),
                 dick_limited=bool(dick > qpn))
+
+
+def synchronized_comparison(dphi_a, dphi_b, nu0, T_ramsey, tau,
+                            T_cycle=None):
+    """Two ensembles interrogated synchronously by ONE local
+    oscillator: the Dick-free comparison (new in v1.15).
+
+    The Dick effect aliases the local oscillator's noise into any
+    single clock's record, but two ensembles read out with the SAME
+    oscillator in the SAME cycles see that noise as common mode, so
+    their frequency DIFFERENCE is free of it and averages down at the
+    projection-noise floor alone -- the protocol behind the
+    entanglement-enhanced comparisons of Robinson et al., Nat. Phys.
+    20, 208 (2024) (1.9(2) dB of stability enhancement at the 10^-17
+    level) and Yang et al., PRL 135, 193202 (2025) (2.0(2) dB beyond
+    the standard quantum limit, 1.1 x 10^-18 single-clock precision).
+    The modeling statement here is exactly that common-mode
+    rejection: this function combines the two ensembles' quantum
+    projection noise and reports NO Dick term for the difference.
+    What it does not model, stated plainly: any noise that is NOT
+    common mode (differential path lengths, gradients) adds on top.
+
+    dphi_a, dphi_b : single-shot phase uncertainties of the two
+        ensembles (rad, e.g. from `phase_sensitivity`).
+    nu0, T_ramsey, tau, T_cycle : as in `clock_allan_deviation`.
+
+    Returns dict(qpn_a, qpn_b, differential, per_clock): the two
+    single-ensemble projection-noise deviations, their quadrature sum
+    (the instability of the difference), and the conventional
+    per-clock figure differential/sqrt(2), exact for two equal
+    ensembles -- an identity the tests assert.
+    """
+    from .metrology import clock_allan_deviation
+    for name, v in (("dphi_a", dphi_a), ("dphi_b", dphi_b)):
+        if not (np.isfinite(v) and v > 0.0):
+            raise ValueError(f"{name} must be finite and positive "
+                             "(rad)")
+    qa = clock_allan_deviation(dphi_a, nu0, T_ramsey, tau, T_cycle)
+    qb = clock_allan_deviation(dphi_b, nu0, T_ramsey, tau, T_cycle)
+    diff = float(np.hypot(qa, qb))
+    return {"qpn_a": qa, "qpn_b": qb, "differential": diff,
+            "per_clock": diff / np.sqrt(2.0)}

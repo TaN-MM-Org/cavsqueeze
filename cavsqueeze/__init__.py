@@ -16,6 +16,7 @@ from .records import load_shots_csv, save_shots_csv
 from .lab import plan_tomography, shots_for_squeezing
 from .dick import (dick_allan_deviation, dick_fourier_coefficients,
                    power_law_psd, ramsey_sensitivity,
+                   synchronized_comparison,
                    total_clock_allan_deviation)
 
-__version__ = "1.14.0"
+__version__ = "1.15.0"
