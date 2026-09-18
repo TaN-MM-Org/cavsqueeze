@@ -14,6 +14,9 @@ Test 4: Rotations are consistent with exact rotations of a product state and
 import numpy as np
 import pytest
 
+pytest.importorskip("qutip", reason="the exact references need QuTiP; "
+                    "the QuTiP-free core is tested without them")
+
 from cavsqueeze.cumulant_raw import Rates, State, product_state, evolve, rotate, wineland_xi2, collective_moments
 from cavsqueeze.exact import full_hilbert, dicke_piqs, xi2_from_moments
 

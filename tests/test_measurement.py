@@ -20,7 +20,7 @@ needs_paper_scripts = pytest.mark.skipif(
 
 
 def test_emission_noise_matches_exact_master_equation():
-    qutip = __import__("qutip")
+    qutip = pytest.importorskip("qutip")
     N, G = 6, 0.3
     Jm = qutip.jmat(N / 2, "-")
     Jz = qutip.jmat(N / 2, "z")
