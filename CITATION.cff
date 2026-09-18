@@ -12,8 +12,8 @@ authors:
   - family-names: Mohsin
     given-names: Abu S. M.
     affiliation: BRAC University
-version: 1.14.0
-date-released: 2026-09-17
+version: 1.15.0
+date-released: 2026-09-18
 license: Apache-2.0
 repository-code: https://github.com/TaN-MM-Org/cavsqueeze
 identifiers:

@@ -203,6 +203,28 @@ the Wineland error bar that no number of tomography shots removes --
 a target below that floor is refused with the floor named, because
 only a better fringe measurement can buy it.
 
+## The Dick-free comparison
+
+The record entanglement-enhanced clocks of 2024-2025 sidestep the
+Dick effect by interrogating two ensembles synchronously with one
+local oscillator, so its noise is common mode and the frequency
+DIFFERENCE averages down at the projection-noise floor alone
+(Robinson et al., Nat. Phys. 20, 208 (2024): 1.9(2) dB of stability
+enhancement at the 10^-17 level; Yang et al., PRL 135, 193202
+(2025): 2.0(2) dB beyond the standard quantum limit at 1.1x10^-18).
+`synchronized_comparison` models exactly that statement -- combined
+projection noise, no Dick term in the difference, differential
+non-common-mode noise stated as out of scope -- and reports the
+conventional per-clock figure:
+
+```python
+from cavsqueeze import phase_sensitivity, synchronized_comparison
+
+out = synchronized_comparison(dphi_a, dphi_b, nu0=4.29e14,
+                              T_ramsey=0.061, tau=1000.0, T_cycle=0.3)
+print(out["differential"], out["per_clock"])
+```
+
 ## Into the bosonic quantum stack
 
 The `interop` module extracts the Holstein-Primakoff mode of the collective
@@ -222,9 +244,9 @@ rho, mode = to_qutip(state, ens.n)    # QuTiP density matrix of the mode
 
 ## How it is checked
 
-63 tests (plus 3 that skip here because they compare against the
+68 tests (plus 3 that skip here because they compare against the
 paper's companion scripts, which live in that repository), on
-Python 3.10-3.13, run in CI on every push. Every physics claim is
+Python 3.10-3.13 plus a QuTiP-free 3.14 job, run in CI on every push. Every physics claim is
 pinned to an exact reference, never a stored number: the cumulant
 solver against exact QuTiP and PIQS references and closed-form
 limits; the independent discrete truncated Wigner solver as a

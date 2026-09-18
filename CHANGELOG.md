@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.15.0 (2026-09-18)
+
+The Dick-free comparison, and a future-proofing pass.
+
+- `dick.synchronized_comparison`: two ensembles interrogated
+  synchronously by one local oscillator -- the protocol of the
+  2024-2025 record entanglement-enhanced clock comparisons (Robinson
+  et al., Nat. Phys. 20, 208 (2024); Yang et al., PRL 135, 193202
+  (2025)) -- modeled as exactly what it is: common-mode rejection of
+  the oscillator noise, combined projection noise for the
+  difference, the conventional per-clock figure, and differential
+  non-common-mode noise stated as out of scope.
+- CI gains a QuTiP-free Python 3.14 job.
+- Anchors: the sqrt(2) and per-clock identities exact for equal
+  ensembles; single-ensemble deviations equal
+  `clock_allan_deviation` bitwise (two public code paths); squeezing
+  gains carry through exactly; the 1/sqrt(tau) law exact; refusals
+  pinned.
+
 ## 1.14.0 (2026-09-17)
 
 Lab adaptability: the error bars of a tomography measurement,
