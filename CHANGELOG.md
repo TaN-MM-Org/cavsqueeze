@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.15.1 (2026-09-22)
+
+A bug fix in the trajectory solver, wider CI coverage, and a rewritten
+README.
+
+### Fixed
+
+- `cavsqueeze.dtwa.evolve` read the sign of `y` wrongly. It integrates
+  the same equations as the cumulant solver, whose variable is
+  `<sigma^+> = (x + i y)/2`, but converted back as if the variable were
+  `<sigma^->`. The mean `J_y` and the `xy` and `yz` covariances it
+  returned therefore had the opposite sign to the cumulant solver (in the
+  4-spin case of the new test at t = 1, `<J_y> = -0.34` against
+  `+0.33`). Squeezing parameters
+  do not depend on that sign and are unchanged; seeded runs give the
+  same squeezing values as before.
+
+### Tests
+
+- `test_dtwa.py::test_mean_spin_follows_the_cumulant_convention`:
+  without interaction the trajectory mean spin follows exact free
+  precession, and with interaction it agrees with the cumulant solver,
+  both to 0.08. It fails on 1.15.0.
+
+### Changed
+
+- CI: the full test matrix now includes Python 3.14 (QuTiP installs
+  there), the QuTiP-free 3.14 job is kept, and a new
+  `oldest-dependencies` job runs the suite on Python 3.10 with
+  NumPy 1.24.0, SciPy 1.10.0, Matplotlib 3.7.0 and QuTiP 5.0.0 (plus
+  setuptools, which QuTiP 5.0.0 imports). The classifiers now list
+  Python 3.13 and 3.14.
+- README rewritten: plain-language guide to the terms, eight runnable
+  examples with their printed output, every refusal and every test
+  tolerance listed as the tests assert it.
+- Docstrings of `dick`, `dtwa` and `interop` corrected where they
+  described tests that do not exist (see below).
+
+### Corrections to earlier notes
+
+- 1.13.0 and the old README called the continuous-interrogation zero
+  and the rectangular-window ratio "exact"; the tests check them to
+  1e-12 (coefficients) and 1e-18 (deviation). The `dick` module
+  docstring said the coefficients were checked against a dense-grid
+  FFT; the test uses adaptive quadrature (as the 1.13.0 notes say).
+- 1.10.0 said every quantity returned by `oat_closed_form` is checked
+  against exact evolution to 1e-12. The mean spin and the variance at
+  the predicted angle are; the largest and smallest variance over the
+  angle grid are checked to 1e-4, and `xi2_S`, `xi2_R` are not
+  compared separately.
+- 1.14.0 "machine precision" and "exactly orthogonal" mean agreement
+  to 1e-12 in the tests.
+- The `dtwa` docstring said the cumulant solver was checked against
+  eight distinguishable spins; the tests use two and four.
+- The `interop` docstring pointed to the test suite for the automatic
+  Fock cutoff at r = 2.3; no test covers it (the export's own check
+  does, at run time).
+
 ## 1.15.0 (2026-09-18)
 
 The Dick-free comparison, and a future-proofing pass.
