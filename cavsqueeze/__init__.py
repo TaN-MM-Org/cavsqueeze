@@ -19,4 +19,4 @@ from .dick import (dick_allan_deviation, dick_fourier_coefficients,
                    synchronized_comparison,
                    total_clock_allan_deviation)
 
-__version__ = "1.15.0"
+__version__ = "1.15.1"

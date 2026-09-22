@@ -33,13 +33,14 @@ to exact exponential integrals, with the resonant k = 0 case handled
 exactly, not by a small denominator).
 
 Anchors asserted in the tests rather than stated: the closed-form
-coefficients equal a dense-grid FFT of the sensitivity function (two
-independent code paths); zero dead time with negligible pulses gives
-exactly zero Dick variance (the aliasing vanishes when the LO is
-watched continuously); in the short-pulse limit the coefficient ratio
-equals the exact rectangular-window form sin(pi m eta)/(pi m eta);
-the floor scales exactly as 1/sqrt(tau); and doubling the harmonic
-cutoff moves the answer by less than the stated tolerance.
+coefficients equal adaptive numerical quadrature of the sensitivity
+function to 1e-9 (two independent code paths); zero dead time with
+negligible pulses gives zero Dick variance (every coefficient below
+1e-12; the aliasing vanishes when the LO is watched continuously); in
+the short-pulse limit the coefficient ratio equals the rectangular-
+window form sin(pi m eta)/(pi m eta) to 1e-12; the floor scales as
+1/sqrt(tau) to 1e-12; and doubling the harmonic cutoff moves the
+answer by less than 1e-3.
 """
 from __future__ import annotations
 

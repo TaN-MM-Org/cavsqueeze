@@ -3,7 +3,7 @@ cumulant closure for an inhomogeneously broadened ensemble.
 
 The cumulant solver truncates at second order.  For a *uniform* ensemble that
 truncation is checked against exact Dicke-basis solutions (`exact.dicke_piqs`),
-and for eight distinguishable spins against the exact master equation
+and for two and four distinguishable spins against the exact master equation
 (`exact.full_hilbert`).  Neither reference reaches an inhomogeneous line at the
 spin numbers the article uses, which is the one place the closure is applied
 without an independent check.
@@ -55,7 +55,7 @@ def _rhs(t, y, delta, G, chi1, n_traj, n_spins):
     """Classical equations of motion for chi sum_jk G_j G_k sigma^+_j sigma^-_k
     plus the detunings, written for every sample at once.
 
-    Same convention as `cumulant._rhs_meanfield`: sigma^- -> s = (x - i y)/2,
+    Same convention as `cumulant._rhs_meanfield`: sigma^+ -> s = (x + i y)/2,
     sigma^z -> z, and the self-term j = k is removed from the collective sum.
     """
     s = y[: 2 * n_traj * n_spins].view(np.complex128).reshape(n_traj, n_spins)
@@ -95,6 +95,11 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
 
     rng = np.random.default_rng(seed)
     v = sample_css_x(n_spins, n_traj, rng)
+    # s is <sigma^+> = (x + i y)/2, as in cumulant.py.  The samples are
+    # symmetric in y, so the draw's y is used with its sign flipped: this is
+    # an equally valid sample and makes seeded runs the exact mirror image
+    # (y -> -y) of earlier versions, whose read-out, not sampling, had the
+    # wrong y sign; squeezing parameters are therefore unchanged.
     s = 0.5 * (v[:, :, 0] - 1j * v[:, :, 1])
     z = v[:, :, 2].astype(float)
     a = delta + chi1 * G ** 2
@@ -112,7 +117,7 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
         want.setdefault(int(i), []).append(k)
     out = {}
     if 0 in want:
-        m = _moments(2 * np.real(s), -2 * np.imag(s), z)
+        m = _moments(2 * np.real(s), 2 * np.imag(s), z)
         for k in want[0]:
             out[k] = m
     for n in range(n_step):
@@ -123,7 +128,7 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
         s = s + (dt / 6.0) * (k1s + 2 * k2s + 2 * k3s + k4s)
         z = z + (dt / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
         if (n + 1) in want:
-            m = _moments(2 * np.real(s), -2 * np.imag(s), z)
+            m = _moments(2 * np.real(s), 2 * np.imag(s), z)
             for k in want[n + 1]:
                 out[k] = m
     return [out[k] for k in range(len(t_eval))]

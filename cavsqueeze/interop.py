@@ -103,7 +103,8 @@ def _auto_dim(mode) -> int:
     photon-number distributions, and it is the squeezed quadrature whose
     delicate cancellation is destroyed first by truncation; empirically a
     cutoff near 40x the mean photon number holds the extremal variances
-    to better than a percent even at r = 2.3 (see the test suite)."""
+    to better than a percent even at r = 2.3; to_qutip(check=True) verifies
+    this for every export."""
     n_mean = (2 * mode["n_th"] + 1) * np.cosh(2 * mode["r"]) / 2 - 0.5
     return int(max(24, np.ceil(40 * (n_mean + 1))))
 
