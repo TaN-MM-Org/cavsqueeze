@@ -390,7 +390,10 @@ def _rhs_meanfield(t, y, rt: Rates):
 
 
 def evolve(st: State, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=None, method="DOP853", feedback=True):
-    """Evolve for time t.  Returns the final State (or a list at t_eval)."""
+    """Evolve for time t >= 0.  Returns the final State (or a list at t_eval)."""
+    if not (np.isfinite(t) and t >= 0):
+        raise ValueError(f"evolution time must be finite and >= 0; got {t} (to reverse the "
+                         "twisting, flip the cavity detuning instead, as twist_untwist does)")
     if t == 0:
         return st.copy() if t_eval is None else [st.copy() for _ in t_eval]
     K = getattr(rt, "K", 0)

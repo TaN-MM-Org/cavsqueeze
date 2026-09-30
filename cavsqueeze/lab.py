@@ -13,7 +13,11 @@ place a Gaussian shot distribution is assumed, stated in
 `cavsqueeze.measured` and inherited here). Because the fit is linear,
 the planned covariance is not an approximation around a guess: it is
 the same matrix `variance_tomography` will report, computed from the
-design alone. The tests assert that equality to machine precision.
+design alone. The tests assert that equality to 1e-12. Since 1.16
+`estimate_squeezing` weights its fit by the fitted curve by default,
+exactly as this planner weights by the expected curve, so the
+estimate's reported covariance equals this plan evaluated at the
+fitted variances and angle (asserted to 1e-9).
 
 Two facts worth knowing when choosing angles, both exact:
 

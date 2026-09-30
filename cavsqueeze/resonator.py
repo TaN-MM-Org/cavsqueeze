@@ -24,8 +24,12 @@ TWO_PI = 2.0 * np.pi
 
 def thermal_occupation(omega: float, temperature: float) -> float:
     """Bose-Einstein occupation at angular frequency omega (rad/s) and temperature (K)."""
-    if temperature <= 0:
+    if not (np.isfinite(temperature) and temperature >= 0):
+        raise ValueError(f"temperature must be finite and >= 0 K; got {temperature}")
+    if temperature == 0:
         return 0.0
+    if not (np.isfinite(omega) and omega > 0):
+        raise ValueError(f"omega must be finite and positive (rad/s); got {omega}")
     x = HBAR * omega / (KB * temperature)
     if x > 700:
         return 0.0
@@ -51,6 +55,20 @@ class CavityParams:
     omega_s: float = TWO_PI * 3.08385e9
     T: float = 0.0
     gamma_phi: float = 0.0
+
+    def __post_init__(self):
+        for name in ("g", "kappa", "Delta", "omega_s", "T", "gamma_phi"):
+            if not np.all(np.isfinite(getattr(self, name))):
+                raise ValueError(f"CavityParams.{name} must be finite; got {getattr(self, name)}")
+        if np.any(np.asarray(self.kappa) < 0) or np.any(np.asarray(self.T) < 0) \
+                or np.any(np.asarray(self.gamma_phi) < 0):
+            raise ValueError("kappa, T and gamma_phi must be >= 0 "
+                             f"(got kappa={self.kappa}, T={self.T}, gamma_phi={self.gamma_phi})")
+        if np.any(np.asarray(self.omega_s) <= 0):
+            raise ValueError(f"omega_s must be positive; got {self.omega_s}")
+        if np.any(4.0 * np.asarray(self.Delta) ** 2 + np.asarray(self.kappa) ** 2 == 0):
+            raise ValueError("kappa and Delta cannot both be zero (the eliminated cavity "
+                             "rates 4 Delta/(4 Delta^2 + kappa^2) would diverge)")
 
     @property
     def chi(self) -> float:
@@ -80,7 +98,10 @@ class CavityParams:
 
 
 def from_hz(g_hz, kappa_hz, Delta_hz, omega_s_hz=3.08385e9, T=0.0, T2=None) -> CavityParams:
-    """Build CavityParams from ordinary frequencies in Hz."""
+    """Build CavityParams from ordinary frequencies in Hz.  T2 (s) sets the
+    pure dephasing rate 1/T2; None or inf means no dephasing."""
+    if T2 is not None and not T2 > 0:
+        raise ValueError(f"T2 must be positive (seconds) or None; got {T2}")
     gamma_phi = 0.0 if T2 is None else 1.0 / T2
     return CavityParams(
         g=TWO_PI * g_hz,

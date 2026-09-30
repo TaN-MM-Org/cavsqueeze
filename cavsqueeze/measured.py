@@ -26,16 +26,29 @@ The estimator leans only on exact structure:
 
   are the eigenvalues and eigenvector angle of the covariance
   (asserted against `numpy.linalg.eigvalsh` in the tests).
-* Sample-variance uncertainty.  The variance of the unbiased sample
-  variance of M Gaussian shots is exactly 2 s^4 / (M - 1); this is
-  the one place a Gaussian shot distribution IS assumed, and the
-  docstring says so instead of hiding it (for the states this package
-  treats, second-order cumulant physics, the assumption is the same
-  one the solver itself makes; heavy-tailed detection noise inflates
-  these error bars).
+* Sample-variance uncertainty.  For M shots from any distribution the
+  unbiased sample variance s^2 has the exact variance
+  sigma^4 [kurtosis / M - (M - 3) / (M (M - 1))], which is
+  2 sigma^4 / (M - 1) for Gaussian shots.  The default error bars use
+  the Gaussian value (the same assumption the cumulant solver makes);
+  shot_noise="empirical" (new in 1.16) uses each angle's measured
+  kurtosis instead, so heavy-tailed detection noise no longer makes the
+  error bars too small.
+* Weights.  Each angle is weighted by 1 / Var(s^2).  Since 1.16 the
+  sigma^4 in that weight is taken from the fitted curve and the fit is
+  repeated until it is self-consistent (weighting="model"); taking it
+  from the measured s^2 (weighting="sample", the only choice before)
+  gives low-variance angles too much weight and biases the fit low.
 * Error propagation.  The (c, a, b) covariance is the exact WLS
-  covariance; V_min and xi^2 uncertainties follow by the delta method
-  with the analytic gradient (1, -a/r, -b/r), r = sqrt(a^2 + b^2).
+  covariance (or, with empirical shot noise, the exact covariance of
+  the fixed-weight fit); V_min and xi^2 uncertainties follow by the
+  delta method with the analytic gradient (1, -a/r, -b/r),
+  r = sqrt(a^2 + b^2).
+* A remaining bias, not corrected: V_min is the smaller of two noisy
+  eigenvalues, so it is biased low.  For a coherent state (V1 = V2,
+  C12 = 0) measured at equally spaced angles with many Gaussian shots
+  the bias tends to sqrt(pi/3) = 1.02 reported error bars (the mean of
+  the Rayleigh-distributed fitted anisotropy r).
 
 Detection noise: a known detection variance (measured on a reference
 state, in spin units squared) may be subtracted per angle before the
@@ -59,18 +72,25 @@ synthetically sampled tomography shots within statistical tolerance;
 a coherent-spin-state sample estimating xi2_R compatible with 1 (the
 standard quantum limit); Monte-Carlo scatter of the estimate matching
 its reported sigma; exact round trip of the detection-noise
-subtraction and refusal on over-subtraction; and refusals on
-degenerate angle sets.
+subtraction and refusal on over-subtraction; refusals on degenerate
+angle sets; and, since 1.16, the Var(s^2) identity by exact
+enumeration, the fixed-weight covariance against Monte Carlo, the
+model-weighted fit's lack of the sample-weight bias, empirical error
+bars matching the scatter of heavy-tailed shots, and the coherent-state
+V_min bias above.
 """
 from __future__ import annotations
 
 import dataclasses
+import warnings
 
 import numpy as np
 
 __all__ = ["SqueezingEstimate", "estimate_squeezing",
            "variance_tomography", "ContrastEstimate",
-           "estimate_contrast"]
+           "estimate_contrast", "sample_variance_sigma"]
+
+_MAX_REWEIGHT = 1000
 
 
 @dataclasses.dataclass
@@ -91,6 +111,13 @@ class SqueezingEstimate:
     contrast, contrast_sigma, N, detection_variance : the inputs that
         entered the normalization, recorded for provenance.
     n_angles, shots_per_angle : data bookkeeping.
+    weighting, shot_noise, n_reweight : how the fit was weighted
+        ("model" or "sample") and how its error bars were computed (see
+        `estimate_squeezing`), and the number of refits made while
+        reweighting (0 for weighting="sample").  New in 1.16.
+    weighting_fallback : None, or why weighting="model" was requested
+        but the fit fell back to sample weights (see
+        `estimate_squeezing`).  New in 1.16.
     """
 
     xi2_S: float
@@ -111,10 +138,26 @@ class SqueezingEstimate:
     detection_variance: float
     n_angles: int
     shots_per_angle: np.ndarray
+    weighting: str = "model"
+    shot_noise: str = "gaussian"
+    n_reweight: int = 0
+    weighting_fallback: str | None = None
 
 
-def variance_tomography(angles, variances, variance_sigmas):
+def variance_tomography(angles, variances, variance_sigmas,
+                        error_sigmas=None):
     """Fit V(theta) = c + a cos 2theta + b sin 2theta by exact WLS.
+
+    variance_sigmas set the fit weights 1/sigma^2.  By default they are
+    also taken as the true standard errors of the variances, and the
+    returned covariance of (c, a, b) is the usual WLS matrix
+    (X^T W X)^-1.  If ``error_sigmas`` is given (new in 1.16), those are
+    the true standard errors instead and the covariance is the exact
+    "sandwich" of a linear estimator with fixed weights,
+
+        (X^T W X)^-1 X^T W diag(error_sigmas^2) W X (X^T W X)^-1,
+
+    which equals the usual matrix when error_sigmas == variance_sigmas.
 
     Returns dict(c, a, b, cov (3, 3), var_min, var_max, var_min_sigma,
     theta_min, V1, V2, C12).  Refuses fewer than 3 angles or an
@@ -127,6 +170,12 @@ def variance_tomography(angles, variances, variance_sigmas):
     if not (th.shape == v.shape == sg.shape):
         raise ValueError("angles, variances and sigmas must share a "
                          "shape")
+    if error_sigmas is not None:
+        es = np.asarray(error_sigmas, dtype=float).ravel()
+        if es.shape != th.shape or not np.all(np.isfinite(es)) \
+                or np.any(es <= 0.0):
+            raise ValueError("error_sigmas must be finite, positive and "
+                             "one per angle")
     if th.size < 3:
         raise ValueError("need at least 3 tomography angles for the 3 "
                          "covariance parameters")
@@ -145,6 +194,10 @@ def variance_tomography(angles, variances, variance_sigmas):
             "distinct quadratures); spread the angles")
     cab = np.linalg.solve(A, Xw.T @ (v * w))
     cov = np.linalg.inv(A)
+    if error_sigmas is not None:
+        L = cov @ (X * (w * w)[:, None]).T       # (3, K): cab = L @ v
+        cov = (L * es ** 2) @ L.T
+        cov = 0.5 * (cov + cov.T)
     c, a, b = (float(x) for x in cab)
     r = float(np.hypot(a, b))
     var_min = c - r
@@ -272,8 +325,75 @@ def estimate_contrast(phases, shots, N) -> ContrastEstimate:
         cov_abd=cov, n_phases=int(ph.size), shots_per_phase=M)
 
 
+def sample_variance_sigma(shots, kurtosis=None):
+    """Standard error of the unbiased sample variance of one shot array.
+
+    For M independent shots from ANY distribution with variance
+    sigma^2 and fourth central moment mu4, the sample variance s^2
+    (ddof = 1) has the exact variance
+
+        Var(s^2) = mu4 / M - sigma^4 (M - 3) / (M (M - 1))
+                 = sigma^4 [kurtosis / M - (M - 3) / (M (M - 1))],
+
+    with kurtosis = mu4 / sigma^4 (3 for Gaussian shots, where the
+    bracket reduces exactly to 2 / (M - 1)).  This function returns the
+    square root with sigma^2 replaced by s^2 and, unless ``kurtosis`` is
+    given, the kurtosis replaced by the sample value m4 / m2^2 (central
+    moments with 1/M normalization).  Those replacements are plug-in
+    estimates, accurate to O(1/M); the formula itself is exact (checked
+    in the tests by enumerating every outcome of a small discrete
+    distribution).  New in 1.16.
+    """
+    x = np.asarray(shots, dtype=float).ravel()
+    m = x.size
+    if m < 2 or not np.all(np.isfinite(x)):
+        raise ValueError("need at least 2 finite shots")
+    s2 = float(np.var(x, ddof=1))
+    return s2 * float(np.sqrt(_var_s2_factor(
+        _sample_kurtosis(x) if kurtosis is None else float(kurtosis), m)))
+
+
+def _sample_kurtosis(x):
+    d = x - x.mean()
+    m2 = float(np.mean(d * d))
+    if m2 <= 0.0:
+        raise ValueError("zero scatter: kurtosis undefined")
+    return float(np.mean(d ** 4)) / m2 ** 2
+
+
+def _var_s2_factor(kurtosis, m):
+    """Var(s^2) / sigma^4 for m shots (exact identity, see
+    `sample_variance_sigma`); always > 0 because kurtosis >= 1."""
+    m = np.asarray(m, dtype=float)
+    return np.asarray(kurtosis, dtype=float) / m - (m - 3.0) / (m * (m - 1.0))
+
+
+def _reweight(th, s2, vdet, gauss, fit, sig_s2):
+    """Iterate the model weights to self-consistency.  Returns (fit,
+    sigmas, number of refits), or a string saying why it could not."""
+    X = np.column_stack([np.ones_like(th), np.cos(2 * th), np.sin(2 * th)])
+    n_refit = 0
+    while True:
+        raw = X @ np.array([fit["c"], fit["a"], fit["b"]]) + vdet
+        if np.any(raw <= 0.0):
+            return (f"the fitted variance curve (before subtracting "
+                    f"detection variance {vdet:.3g}) reaches "
+                    f"{raw.min():.3g} <= 0 at a measured angle, so it "
+                    "cannot set the fit weights")
+        new = raw * gauss
+        if np.max(np.abs(new / sig_s2 - 1.0)) <= 1e-12:
+            return fit, sig_s2, n_refit      # the weights are self-consistent
+        if n_refit == _MAX_REWEIGHT:
+            return (f"the model-weighted fit did not settle in "
+                    f"{_MAX_REWEIGHT} reweighting steps")
+        sig_s2 = new
+        fit = variance_tomography(th, s2 - vdet, sig_s2)
+        n_refit += 1
+
+
 def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
-                       detection_variance=0.0) -> SqueezingEstimate:
+                       detection_variance=0.0, weighting="model",
+                       shot_noise="gaussian") -> SqueezingEstimate:
     """Estimate xi2_S and xi2_R from tomography shot records.
 
     Parameters
@@ -291,6 +411,40 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
         squared) subtracted from every per-angle sample variance
         before the fit; 0 means no correction.  An over-subtraction
         that drives the fitted minimal variance to <= 0 raises.
+    weighting : "model" (default, new in 1.16) or "sample".  The fit
+        weight of each angle is 1 / sigma_k^2 with sigma_k the
+        standard error of that angle's sample variance, which is
+        proportional to the variance itself.  "sample" takes it from
+        the measured sample variance (the only choice before 1.16);
+        that makes the weights depend on the data they weight, so
+        angles whose variance happened to come out low count more, and
+        the fitted curve is biased low (in the tests, 400 experiments
+        with 9 angles x 20 shots: the mean of (V1 + V2)/2 is 14 % low).
+        "model" takes it from the fitted curve V(theta_k) itself and
+        repeats the fit until the weights stop changing (iteratively
+        reweighted least squares); in the same test the mean is off
+        by -0.2 % +/- 0.6 %, consistent with no bias.  V_min keeps a
+        smaller low bias of a different origin (see the module
+        docstring).  The model weights never refuse data the sample
+        weights can fit: if the reweighting cannot proceed (the fitted
+        curve dips to zero or below at a measured angle), does not
+        settle, or ends with a minimal variance <= 0 while the sample
+        fit's is positive, the result is the weighting="sample" fit, a
+        RuntimeWarning says so, and ``weighting_fallback`` records why.
+        This happens with few shots per angle (seeded runs, 6 angles,
+        300 datasets each: 27-29 % of the datasets with 3 shots,
+        11-13 % with 5, 1-2 % with 10; see the 1.16.0 changelog).  So
+        the default refuses only data that weighting="sample" refuses
+        too.
+    shot_noise : "gaussian" (default) or "empirical" (new in 1.16).
+        How the error bars treat the scatter of each sample variance.
+        "gaussian" uses Var(s^2) = 2 sigma^4 / (M - 1), exact for
+        Gaussian shots and too small for heavy-tailed ones.
+        "empirical" uses the exact distribution-free identity
+        Var(s^2) = sigma^4 [kurtosis / M - (M - 3) / (M (M - 1))] with
+        each angle's measured kurtosis, and propagates it through the
+        fixed-weight fit exactly (see `variance_tomography`'s
+        ``error_sigmas``).  The point estimate is the same either way.
 
     Returns a :class:`SqueezingEstimate`.
     """
@@ -310,19 +464,53 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
     vdet = float(detection_variance)
     if vdet < 0.0 or not np.isfinite(vdet):
         raise ValueError("detection_variance must be finite and >= 0")
+    if weighting not in ("model", "sample"):
+        raise ValueError("weighting must be 'model' or 'sample'")
+    if shot_noise not in ("gaussian", "empirical"):
+        raise ValueError("shot_noise must be 'gaussian' or 'empirical'")
     M = np.array([r.size for r in rows])
     s2 = np.array([float(np.var(r, ddof=1)) for r in rows])
     if np.any(s2 <= 0.0):
         raise ValueError("a per-angle sample variance is zero; "
                          "identical shots carry no noise information")
-    sig_s2 = s2 * np.sqrt(2.0 / (M - 1))          # Gaussian shots
+    gauss = np.sqrt(2.0 / (M - 1))                # Gaussian shots
+    over = ("the correction over-subtracts (or the data are "
+            "degenerate); re-measure the detection noise")
+    sig_s2 = s2 * gauss
     fit = variance_tomography(th, s2 - vdet, sig_s2)
+    n_refit = 0
+    used = weighting
+    fallback = None
+    if weighting == "model":
+        sample_fit, sample_sig = fit, sig_s2
+        fallback = _reweight(th, s2, vdet, gauss, fit, sig_s2)
+        if isinstance(fallback, tuple):
+            fit, sig_s2, n_refit = fallback
+            fallback = None
+            if fit["var_min"] <= 0.0 < sample_fit["var_min"]:
+                fallback = (f"the model-weighted fit gives a minimal "
+                            f"variance {fit['var_min']:.3g} <= 0")
+        if fallback is not None and sample_fit["var_min"] <= 0.0:
+            fit = sample_fit          # neither weighting can fit: refused below
+        elif fallback is not None:
+            # never refuse data that the 1.15 weights can fit: fall back
+            # to them, say so, and record it in the result
+            warnings.warn(
+                f"estimate_squeezing: {fallback} (too few shots per angle "
+                "for model weights); falling back to weighting='sample', "
+                "whose fit is biased low with few shots. The result "
+                "records this in weighting_fallback.",
+                RuntimeWarning, stacklevel=2)
+            fit, sig_s2, n_refit, used = sample_fit, sample_sig, 0, "sample"
+    if shot_noise == "empirical":
+        kurt = np.array([_sample_kurtosis(r) for r in rows])
+        err = (sig_s2 / gauss) * np.sqrt(_var_s2_factor(kurt, M))
+        fit = variance_tomography(th, s2 - vdet, sig_s2,
+                                  error_sigmas=err)
     if fit["var_min"] <= 0.0:
         raise ValueError(
             f"fitted minimal variance {fit['var_min']:.3g} <= 0 after "
-            f"subtracting detection variance {vdet:.3g}: the "
-            "correction over-subtracts (or the data are degenerate); "
-            "re-measure the detection noise")
+            f"subtracting detection variance {vdet:.3g}: {over}")
     vmin, svmin = fit["var_min"], fit["var_min_sigma"]
     xi2_S = 4.0 * vmin / N
     xi2_S_sigma = 4.0 * svmin / N
@@ -338,4 +526,5 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
         cov_cab=fit["cov"], contrast=float(contrast),
         contrast_sigma=float(contrast_sigma), N=int(N),
         detection_variance=vdet, n_angles=int(th.size),
-        shots_per_angle=M)
+        shots_per_angle=M, weighting=used, shot_noise=shot_noise,
+        n_reweight=int(n_refit), weighting_fallback=fallback)

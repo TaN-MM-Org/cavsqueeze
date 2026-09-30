@@ -65,8 +65,16 @@ def squeezing_parameters(st: State, n, weights=None, spec_n=None):
                 J=J, S1=S1, S2=S2, dphi=dphi)
 
 
+def _check_positive(**kw):
+    for name, v in kw.items():
+        if not (np.isfinite(v) and v > 0):
+            raise ValueError(f"{name} must be finite and positive; got {v}")
+
+
 def metrological_gain_db(xi2_R: float) -> float:
     """Gain over the standard quantum limit in dB: -10 log10(xi_R^2)."""
+    if not xi2_R > 0:
+        raise ValueError(f"xi2_R must be positive; got {xi2_R}")
     return float(-10.0 * np.log10(xi2_R))
 
 
@@ -89,6 +97,7 @@ def clock_allan_deviation(dphi: float, nu0: float, T_ramsey: float,
     Ramsey interrogation time (s), tau averaging time (s), T_cycle full
     cycle time (s, defaults to T_ramsey; dead time makes it larger).
     """
+    _check_positive(dphi=dphi, nu0=nu0, T_ramsey=T_ramsey, tau=tau)
     Tc = T_ramsey if T_cycle is None else T_cycle
     if Tc < T_ramsey:
         raise ValueError("T_cycle must be at least T_ramsey")
@@ -101,12 +110,14 @@ def magnetometer_sensitivity(dphi: float, gamma: float, T_ramsey: float,
 
     dB(tau) = dphi / (gamma T_ramsey) * sqrt(T_cycle / tau), with gamma the
     gyromagnetic ratio in rad/(s T).  With tau = 1 s this is the sensitivity
-    in T/sqrt(Hz).
+    in T/sqrt(Hz).  Only |gamma| matters: a negative gyromagnetic ratio
+    gives the same (positive) field uncertainty.
     """
+    _check_positive(dphi=dphi, abs_gamma=abs(gamma), T_ramsey=T_ramsey, tau=tau)
     Tc = T_ramsey if T_cycle is None else T_cycle
     if Tc < T_ramsey:
         raise ValueError("T_cycle must be at least T_ramsey")
-    return float(dphi / (gamma * T_ramsey) * np.sqrt(Tc / tau))
+    return float(dphi / (abs(gamma) * T_ramsey) * np.sqrt(Tc / tau))
 
 
 def oat_closed_form(N: int, mu: float):

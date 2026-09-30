@@ -80,6 +80,13 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     adaptive stepping spends its time moving memory rather than integrating.
     `last_steps` reports the step count so that convergence can be checked by
     doubling `steps_per_rad`.
+
+    Every time in `t_eval` is reached exactly: the interval between two
+    consecutive requested times is split into a whole number of equal steps,
+    none longer than the nominal step T / n_nominal, where n_nominal =
+    max(min_steps, steps_per_rad * fastest * T / (2 pi)).  (Before 1.16 the moments
+    were read at the nearest point of one uniform grid, up to half a step
+    away from the requested time.)  Times must be finite and >= 0.
     """
     global last_steps
     delta = np.asarray(delta, float)
@@ -87,11 +94,13 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     n_spins = len(delta)
     chiN = chi1 * float(np.sum(G ** 2))
     t_eval = np.asarray(t_eval, float)
+    if t_eval.ndim != 1 or t_eval.size == 0 or not np.all(np.isfinite(t_eval)) \
+            or np.any(t_eval < 0):
+        raise ValueError("t_eval must be a non-empty 1-D array of finite times >= 0")
     T = float(np.max(t_eval))
     fastest = max(float(np.max(np.abs(delta))), abs(chiN), 1.0)
-    n_step = int(max(min_steps, np.ceil(steps_per_rad * fastest * T / (2 * np.pi))))
-    last_steps = n_step
-    dt = T / n_step
+    n_nominal = int(max(min_steps, np.ceil(steps_per_rad * fastest * T / (2 * np.pi))))
+    h_max = T / n_nominal if T > 0 else 0.0
 
     rng = np.random.default_rng(seed)
     v = sample_css_x(n_spins, n_traj, rng)
@@ -103,7 +112,6 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     s = 0.5 * (v[:, :, 0] - 1j * v[:, :, 1])
     z = v[:, :, 2].astype(float)
     a = delta + chi1 * G ** 2
-    idx = np.clip(np.round(t_eval / dt).astype(int), 0, n_step)
 
     def deriv(s, z):
         coll = (s * G).sum(axis=1)
@@ -112,26 +120,26 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
         dz = 4.0 * chi1 * G * np.imag(s * np.conj(other))
         return ds, dz
 
-    want = {}
-    for k, i in enumerate(idx):
-        want.setdefault(int(i), []).append(k)
     out = {}
-    if 0 in want:
-        m = _moments(2 * np.real(s), 2 * np.imag(s), z)
-        for k in want[0]:
-            out[k] = m
-    for n in range(n_step):
-        k1s, k1z = deriv(s, z)
-        k2s, k2z = deriv(s + 0.5 * dt * k1s, z + 0.5 * dt * k1z)
-        k3s, k3z = deriv(s + 0.5 * dt * k2s, z + 0.5 * dt * k2z)
-        k4s, k4z = deriv(s + dt * k3s, z + dt * k3z)
-        s = s + (dt / 6.0) * (k1s + 2 * k2s + 2 * k3s + k4s)
-        z = z + (dt / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
-        if (n + 1) in want:
-            m = _moments(2 * np.real(s), 2 * np.imag(s), z)
-            for k in want[n + 1]:
-                out[k] = m
-    return [out[k] for k in range(len(t_eval))]
+    t_now = 0.0
+    n_total = 0
+    for t_next in np.unique(t_eval):
+        span = float(t_next) - t_now
+        if span > 0:
+            n_seg = max(1, int(np.ceil(span / h_max * (1.0 - 1e-12))))
+            dt = span / n_seg
+            for _ in range(n_seg):
+                k1s, k1z = deriv(s, z)
+                k2s, k2z = deriv(s + 0.5 * dt * k1s, z + 0.5 * dt * k1z)
+                k3s, k3z = deriv(s + 0.5 * dt * k2s, z + 0.5 * dt * k2z)
+                k4s, k4z = deriv(s + dt * k3s, z + dt * k3z)
+                s = s + (dt / 6.0) * (k1s + 2 * k2s + 2 * k3s + k4s)
+                z = z + (dt / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
+            n_total += n_seg
+            t_now = float(t_next)
+        out[float(t_next)] = _moments(2 * np.real(s), 2 * np.imag(s), z)
+    last_steps = n_total
+    return [out[float(tt)] for tt in t_eval]
 
 
 last_steps = 0

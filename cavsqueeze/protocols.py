@@ -96,6 +96,8 @@ def optimal_squeezing(params: CavityParams, ens: Ensemble, t_lo: float, t_hi: fl
     Stage 2: a linear scan over [t*/2, 2 t*] with points_per_period samples per
     gap period 2 pi / (chi N) (capped at max_fine points) resolves the
     oscillations of the squeezing parameter at the collective gap frequency."""
+    if not (np.isfinite(t_lo) and np.isfinite(t_hi) and 0 < t_lo < t_hi):
+        raise ValueError(f"need 0 < t_lo < t_hi; got t_lo={t_lo}, t_hi={t_hi}")
     rt = Rates.from_params(params, ens)
     ts = np.geomspace(t_lo, t_hi, n_coarse)
     vals = np.array([squeezing_after(params, ens, t, echo=echo, weights=weights, **kw)["xi2"] for t in ts])

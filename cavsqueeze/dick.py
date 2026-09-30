@@ -152,6 +152,8 @@ def dick_allan_deviation(S_y, tau, T_ramsey, T_cycle, tau_pulse=0.0,
         for -- if the last decade of harmonics still contributes more
         than `tail_tol` of the sum, the cutoff is refused as too low.
     """
+    if not (np.isfinite(tau) and tau > 0):
+        raise ValueError(f"tau must be finite and positive (s); got {tau}")
     g0, gm = dick_fourier_coefficients(m_max, T_ramsey, T_cycle,
                                        tau_pulse)
     Tc = float(T_cycle)

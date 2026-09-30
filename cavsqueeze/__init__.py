@@ -11,7 +11,7 @@ from .protocols import (css_x, optimal_squeezing, plain_squeezed_readout, pulse,
                         squeezing_trace, twist, twist_imperfect, twist_untwist)
 from .measured import (ContrastEstimate, SqueezingEstimate,
                        estimate_contrast, estimate_squeezing,
-                       variance_tomography)
+                       sample_variance_sigma, variance_tomography)
 from .records import load_shots_csv, save_shots_csv
 from .lab import plan_tomography, shots_for_squeezing
 from .dick import (dick_allan_deviation, dick_fourier_coefficients,
@@ -19,4 +19,4 @@ from .dick import (dick_allan_deviation, dick_fourier_coefficients,
                    synchronized_comparison,
                    total_clock_allan_deviation)
 
-__version__ = "1.15.1"
+__version__ = "1.16.0"
