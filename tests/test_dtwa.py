@@ -5,6 +5,7 @@ for an inhomogeneous line: before it is trusted where the answer is unknown, it
 is checked where the answer is known in closed form.
 """
 import numpy as np
+import pytest
 
 from cavsqueeze import dtwa
 
@@ -82,3 +83,24 @@ def test_mean_spin_follows_the_cumulant_convention():
     J = C.collective_moments(ref, rt.n)[0]
     got = dtwa.evolve(delta, np.ones(4), 0.2, [1.0], n_traj=4000, seed=0)[0]
     assert np.allclose(got["mean"], J, atol=0.08), (got["mean"], J)
+
+
+def test_moments_are_read_at_the_requested_times():
+    """Without interaction and with one common detuning, every sample
+    rotates rigidly about z, so the returned mean spin and covariance at
+    time t are exactly those at t = 0 rotated by delta t. Before 1.16 the
+    moments were read on the nearest point of a uniform step grid (at
+    t = 0.37 here: 0.370075, a rotation error of 7.5e-5 rad). Times are
+    given unsorted to check the bookkeeping."""
+    delta = 1.3
+    t = np.array([1.13, 0.0, 0.37, 0.37])
+    out = dtwa.evolve(np.full(3, delta), np.ones(3), 0.0, t, n_traj=64,
+                      seed=4)
+    J0, C0 = out[1]["mean"], out[1]["cov"]
+    for tt, o in zip(t, out):
+        c, s = np.cos(delta * tt), np.sin(delta * tt)
+        R = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+        assert np.allclose(o["mean"], R @ J0, rtol=0, atol=1e-9)
+        assert np.allclose(o["cov"], R @ C0 @ R.T, rtol=0, atol=1e-9)
+    with pytest.raises(ValueError):
+        dtwa.evolve(np.zeros(2), np.ones(2), 0.1, [-1.0, 0.5])
