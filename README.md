@@ -24,7 +24,8 @@ It answers these questions:
 - Given shot-by-shot data from an experiment, how much squeezing was
   actually there, and with what error bar?
 - How many shots does a measurement need to reach a target error bar,
-  before it is taken?
+  before it is taken? And how large is the error bar when the
+  detector's noise is not Gaussian?
 - When does the noise of the clock laser (the Dick effect) make
   squeezing useless?
 
@@ -152,7 +153,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.15.1. All device values are illustrative
+with cavsqueeze 1.16.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -325,8 +326,8 @@ print(f"gain:     {metrological_gain_db(est.xi2_R):.2f} dB")
 
 ```
 contrast: 0.9713 +/- 0.0020 (true 0.9695)
-xi2_R:    0.1421 +/- 0.0043 (true 0.1331)
-gain:     8.47 dB
+xi2_R:    0.1420 +/- 0.0043 (true 0.1331)
+gain:     8.48 dB
 ```
 
 The data here are synthetic, drawn from the exact twisted state of
@@ -343,13 +344,21 @@ run the last block. The steps:
 3. `estimate_squeezing` fits the tomography. The variance at angle
    `theta` follows `c + a cos(2 theta) + b sin(2 theta)` for any state
    (it is how a 2x2 covariance matrix rotates), so this fit is also
-   linear. Its only assumption is in the error bars: the uncertainty
-   of each sample variance is taken as `s^2 sqrt(2/(M-1))`, which holds
-   for Gaussian shot noise. A known detection-noise variance can be
+   linear. Each angle is weighted by how precisely its variance is
+   known, which is proportional to the variance itself; since 1.16 the
+   variance used for that weight is read from the fitted curve, and
+   the fit is repeated until it no longer changes (see
+   [Corrections in earlier versions](#corrections-in-earlier-versions)
+   for why). By default the uncertainty of each sample variance of `M`
+   shots is taken as `sigma^2 sqrt(2/(M-1))`, which holds for Gaussian
+   shot noise; `shot_noise="empirical"` measures it from the shots
+   instead (example 9). A known detection-noise variance can be
    subtracted with `detection_variance=...`.
 
 In this run the estimate is about two error bars from the true value,
-which is within normal scatter for one experiment.
+which is within normal scatter for one experiment. (With 1.15.1 this
+example printed `xi2_R: 0.1421` and `gain: 8.47 dB`; the change is the
+new fit weights.)
 
 ### 6. Planning the number of shots
 
@@ -477,6 +486,49 @@ raises if the Fock-space cutoff (the number of photon-number levels
 QuTiP keeps) was too small. It keeps second moments (variances and
 covariances) only.
 
+### 9. Error bars when the detector has outliers
+
+```python
+import numpy as np
+from cavsqueeze import estimate_squeezing
+
+# Synthetic tomography of a squeezed state of N = 100 spins (variances 5 and
+# 40 in spin units squared, xi2_S = 0.2), read out by a detector that gives
+# 5 % of shots with three times the usual spread (outliers).
+rng = np.random.default_rng(1)
+angles = np.linspace(0, np.pi, 6, endpoint=False)
+var = 22.5 - 17.5 * np.cos(2 * (angles - 0.3))
+z = rng.normal(0, 1, (6, 400))
+z = np.where(rng.random((6, 400)) < 0.05, 3 * z, z) / np.sqrt(0.95 + 0.05 * 9)
+shots = z * np.sqrt(var)[:, None]
+
+for noise in ("gaussian", "empirical"):
+    est = estimate_squeezing(angles, shots, N=100, contrast=1.0,
+                             shot_noise=noise)
+    print(f"shot_noise={noise!r:12s} xi2_S = {est.xi2_S:.4f} "
+          f"+/- {est.xi2_S_sigma:.4f}")
+```
+
+```
+shot_noise='gaussian'   xi2_S = 0.2202 +/- 0.0182
+shot_noise='empirical'  xi2_S = 0.2202 +/- 0.0382
+```
+
+The error bar of a squeezing estimate comes from how much each
+angle's sample variance scatters. For Gaussian shots that scatter is
+fixed by the variance alone; with outliers (a heavy-tailed
+distribution) it is larger. `shot_noise="empirical"` measures it from
+the shots through the **kurtosis** (the fourth moment of the shots
+divided by the squared variance; 3 for a Gaussian), using the exact
+formula `Var(s^2) = sigma^4 [kurtosis/M - (M-3)/(M(M-1))]` for `M`
+shots, and carries it through the fit. The estimate itself is the same
+either way; only the error bar changes. Here the true value 0.2 is
+1.1 Gaussian error bars away but 0.5 empirical ones. In the tests, over
+200 experiments like this one the Gaussian error bar is too small by
+more than a factor 1.5, and the empirical one matches the actual
+scatter to within 20 %. `sample_variance_sigma(shots)` gives the same
+error bar for a single shot array.
+
 ## What is in the package
 
 Every name below is importable from `cavsqueeze` directly. Each
@@ -495,7 +547,12 @@ inputs, units and conventions.
   g/2pi = 15 mHz, kappa/2pi = 660 kHz, Delta/2pi = 22 MHz.
 - `Ensemble`, `homogeneous` -- a set of classes (detuning, coupling
   weight, number of spins); one class with no disorder.
-- `lineshape` -- Gaussian, Lorentzian or Voigt line from its FWHM.
+- `lineshape` -- Gaussian, Lorentzian or Voigt line from its FWHM. For
+  the Voigt line (a Gaussian and a Lorentzian combined),
+  `lorentz_fraction` sets the Lorentzian part's FWHM as a fraction of
+  the total, and since 1.16 the Gaussian part is solved for so that the
+  total FWHM is the one asked for, checked to 1e-9 (`split="olivero"`
+  gives the approximate split used before).
 - `equal_probability_classes` -- cuts a line into M classes of equal
   weight. `product_classes` combines this with a spread of coupling
   strengths, and `log_uniform_weights` makes such a spread.
@@ -561,7 +618,19 @@ inputs, units and conventions.
   and its error bar.
 - `estimate_squeezing` (returns `SqueezingEstimate`) and the fit behind
   it, `variance_tomography` -- squeezing parameters and error bars
-  from tomography shots.
+  from tomography shots. Options (new in 1.16): `weighting="model"`
+  (default) or `"sample"` (the 1.15 fit weights), and
+  `shot_noise="gaussian"` (default) or `"empirical"` (example 9).
+  With few shots per angle the model weights cannot always be
+  computed (the fitted curve can dip to zero or below at a measured
+  angle). The default then returns the `"sample"` fit instead, warns
+  (`RuntimeWarning`) and records why in `weighting_fallback`, so it
+  never refuses data the 1.15 weights can fit. In a seeded script (not
+  part of the test suite; setup in CHANGELOG 1.16.0) with 6 angles this
+  happened for 27-29 % of the datasets with 3 shots per
+  angle, 11-13 % with 5 and 1-2 % with 10.
+- `sample_variance_sigma` -- the error bar of one sample variance,
+  from the measured kurtosis or a given one.
 - `plan_tomography`, `shots_for_squeezing` -- predicted error bars and
   the shot count for a target.
 
@@ -587,7 +656,26 @@ inputs, units and conventions.
 
 `cavsqueeze` raises `ValueError` instead of guessing when:
 
-- `lineshape` is given a name other than gaussian, lorentzian or voigt;
+- `lineshape` is given a name other than gaussian, lorentzian or voigt,
+  a width that is not finite and positive, or a `lorentz_fraction`
+  outside [0, 1] (new in 1.16; before, a negative width gave `nan`
+  detunings without an error);
+- an `Ensemble` has arrays of different lengths, non-finite values,
+  negative occupations or no spins; `equal_probability_classes` gets
+  fewer than 1 class; `product_classes` gets negative or all-zero
+  probabilities (new in 1.16);
+- cavity parameters are not finite, `kappa`, the temperature or the
+  dephasing rate is negative, `kappa` and `Delta` are both zero, or
+  `T2` is not positive (new in 1.16; before, a negative `T2` gave a
+  negative dephasing rate without an error);
+- an evolution time is negative, or `optimal_squeezing` gets limits
+  that do not satisfy `0 < t_lo < t_hi` (new in 1.16);
+- a clock or magnetometer projection gets a phase noise, clock
+  frequency, Ramsey time, averaging time or gyromagnetic ratio that is
+  not finite and positive (only its size is used for the gyromagnetic
+  ratio), `metrological_gain_db` gets `xi2_R <= 0`, or the Dick floor
+  gets an averaging time that is not positive (new in 1.16; before,
+  a negative `tau` returned `nan`);
 - `oat_closed_form` is asked for fewer than 2 spins;
 - a clock or magnetometer cycle time `T_cycle` is shorter than the
   Ramsey time;
@@ -632,7 +720,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-69 tests run on every push to `main` and every pull request, on
+123 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -689,6 +777,10 @@ few minutes; most of it is one test of the trajectory solver.
   free precession when there is no interaction, and agrees with the
   cumulant solver when there is, to 0.08 in spin units (4000
   trajectories). This pins the sign of `J_y` (new in 1.15.1).
+- The moments are returned at exactly the requested times: for spins
+  with one common detuning and no interaction, the mean spin and the
+  covariance at each time equal those at `t = 0` rotated by
+  `delta t`, to 1e-9 (new in 1.16; 1.15.1 is off by 1.3e-4 here).
 
 **Metrology and one-axis twisting**
 
@@ -739,6 +831,43 @@ few minutes; most of it is one test of the trajectory solver.
   2 times (contrast) the reported error bar.
 - A clean fringe returns contrast and phase to 1e-7.
 - Shot files round-trip exactly.
+- The formula for the scatter of a sample variance,
+  `sigma^4 [kurtosis/M - (M-3)/(M(M-1))]`, equals the exact value
+  obtained by listing every possible outcome of a three-valued
+  distribution (2, 4 and 5 shots), to 1e-12 relative.
+- With weights that are not the true errors, the fit covariance
+  reported with `error_sigmas` matches 3000 simulated fits to 10 %;
+  with the true errors as weights it equals the usual matrix to 1e-12.
+- Over 400 seeded experiments (9 angles, 20 shots each), the fitted
+  mean variance `(V1 + V2)/2` is 14 % low with `weighting="sample"`
+  and within 3 standard errors of the truth with `weighting="model"`.
+  The model-weighted covariance equals `plan_tomography` at the
+  fitted values to 1e-9.
+- With 3 shots per angle (200 seeded datasets), whenever the default
+  falls back it returns exactly the `weighting="sample"` result with
+  one `RuntimeWarning`, and it refuses only datasets that
+  `weighting="sample"` also refuses.
+- With 5 % outlier shots, over 200 experiments the Gaussian error bar
+  is too small by more than 1.5 times, and the empirical one is within
+  0.85 and 1.2 times the scatter.
+- For a coherent state, the low bias of the fitted smallest variance
+  (see [Limits](#limits)) is between 0.85 and 1.3 reported error bars
+  over 400 experiments; the expected value for many shots is
+  `sqrt(pi/3) = 1.02`.
+
+**Line shapes and inputs**
+
+- The Voigt line's total FWHM, checked by computing the profile as a
+  direct numerical convolution of its Gaussian and Lorentzian parts
+  (independently of SciPy's Voigt function), equals the requested
+  width: the profile at half the width is half its peak to 1e-9, for
+  Lorentzian fractions 0.1, 0.3, 0.6 and 0.9. At the same fractions the
+  old split misses by between 1e-6 and 2.5e-4. Its tabulated quantiles
+  agree with numerical integration of the profile to 1e-7, and its
+  pure-Lorentzian limit with the exact Lorentzian quantiles to 1e-6.
+- Each refusal added in 1.16 is triggered in the tests, and the
+  accepted edge cases (no dephasing, zero temperature, a lossless
+  cavity, a negative gyromagnetic ratio) still work.
 - The planned covariance equals the fitted one to 1e-12, equally
   spaced angles give the diagonal design to 1e-12, and over 300 seeded
   experiments the scatter matches the planned error bar to 20 %.
@@ -753,6 +882,37 @@ condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.16.0 changed the tomography fit weights.** Each angle's sample
+variance is weighted by how precisely it is known, and that precision
+is proportional to the variance itself. Up to 1.15.1 the variance in
+the weight was the measured one, so an angle whose variance came out
+low by chance got a larger weight, and the fit leaned low. With few
+shots per angle this is large: over 400 simulated experiments with 9
+angles and 20 shots each, the fitted mean variance was 14 % low. Since
+1.16.0 the weight uses the fitted curve, and the fit is repeated until
+it no longer changes; in the same test the mean is off by
+-0.2 % +/- 0.6 %, consistent with no bias. With many shots the
+difference is small (example 5 moved from `xi2_R = 0.1421` to
+`0.1420`). `weighting="sample"` gives the old result, and it is also
+what the default falls back to (with a warning) when there are too few
+shots per angle for the new weights.
+
+**1.16.0 returns trajectory-solver moments at the requested times.**
+`cavsqueeze.dtwa.evolve` stepped on one uniform grid and returned the
+moments at the grid point nearest each requested time, up to half a
+step away (for example `t = 0.37` was read at `0.370075`). Each
+requested time is now reached exactly. In the one-axis-twisting test
+the best squeezing moves from -14.1731 dB to -14.1736 dB (exact:
+-14.2020 dB).
+
+**1.16.0 made the Voigt width match the request.** The Gaussian and
+Lorentzian parts of a Voigt line were split with the
+Olivero-Longbothum approximation, which gives a total FWHM off by up
+to about 2.3e-4 of the requested width. The split is now solved for
+numerically, and the width is checked to 1e-9. For
+`lorentz_fraction = 0.3` the class detunings of a 16-class
+discretization move by at most 2.0e-4 of their value.
 
 **1.15.1 fixed a sign in the trajectory solver.** `cavsqueeze.dtwa`
 integrates the same equations as the cumulant solver, whose variable
@@ -797,14 +957,24 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 - The continuous-measurement option does not condition the spectator
   spins of `tail_resolved_classes`; use a discretization without
   spectators with it.
-- The error bars of the estimators assume Gaussian shot noise for the
-  sample-variance uncertainty. Heavy-tailed detection noise makes them
-  too small.
+- By default the error bars of `estimate_squeezing` assume Gaussian
+  shot noise, and heavy-tailed detection noise makes them too small;
+  use `shot_noise="empirical"`. That option estimates the kurtosis of
+  each angle's shots from the shots themselves, which needs enough
+  shots to see the tails (the tests use 400 per angle). The planning
+  functions (`plan_tomography`, `shots_for_squeezing`) still assume
+  Gaussian shots.
+- The fitted smallest variance is the smaller of two noisy numbers and
+  is biased low. For a coherent state (two equal variances) measured at
+  equally spaced angles the bias is about one reported error bar, so
+  such a state can look slightly squeezed. This bias is not
+  corrected; compare with the error bar before claiming squeezing of
+  about that size.
 - The clock and magnetometer formulas use linear error propagation
   around the operating point (the same approximation that defines
   `xi2_R`).
-- The Voigt line splits its width between the Gaussian and Lorentzian
-  parts with the Olivero-Longbothum approximation.
+- The Voigt line's quantiles come from a tabulated cumulative
+  distribution (checked to 1e-7 against numerical integration).
 - The bosonic export keeps second moments only.
 
 ## Where it comes from

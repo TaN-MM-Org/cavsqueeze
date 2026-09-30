@@ -1,5 +1,143 @@
 # Changelog
 
+## 1.16.0 (2026-09-30)
+
+Measured-data release: less biased tomography fits, error bars that
+hold for non-Gaussian detection noise, an exact Voigt width, moments
+of the trajectory solver at the requested times, and input checks
+where bad inputs used to give silent `nan` or unphysical numbers.
+
+### Added
+
+- `estimate_squeezing(..., shot_noise="empirical")`: error bars that do
+  not assume Gaussian shots. Each angle's sample variance scatters by
+  the exact distribution-free amount
+  `Var(s^2) = sigma^4 [kurtosis/M - (M-3)/(M(M-1))]`; the kurtosis is
+  measured from that angle's shots (a plug-in estimate), and the
+  scatter is carried through the fit exactly. The point estimate is
+  unchanged; the default stays `"gaussian"`. This lifts the README
+  limit "heavy-tailed detection noise makes the error bars too small".
+- `variance_tomography(..., error_sigmas=...)`: the exact covariance of
+  the fit when the weights are not the true errors
+  ((X^T W X)^-1 X^T W Sigma W X (X^T W X)^-1).
+- `sample_variance_sigma(shots, kurtosis=None)`: the error bar of one
+  sample variance by the same formula.
+- `estimate_squeezing(..., weighting=...)` and the result fields
+  `weighting`, `shot_noise`, `n_reweight`, `weighting_fallback`.
+- `lineshape(..., split=...)` / `voigt(..., split=...)`: `"exact"`
+  (default) or `"olivero"` (the pre-1.16 split).
+- README example 9 (outlier shots, both error bars).
+
+### Changed
+
+- `estimate_squeezing` weights its fit by the fitted variance curve and
+  repeats the fit until the weights stop changing
+  (`weighting="model"`, the new default). The 1.15 weights, from the
+  measured sample variances, are `weighting="sample"`. Reason: see
+  Fixed.
+- The Voigt line's Gaussian part is solved for so that the total FWHM
+  is the requested one (root-finding on SciPy's exact Voigt profile;
+  the test checks the half-maximum point to 1e-9); before, the
+  Olivero-Longbothum approximation left it off by up to about 2.3e-4
+  (largest value found for `lorentz_fraction` between 0.1 and 0.9).
+- `magnetometer_sensitivity` uses `|gamma|`: a negative gyromagnetic
+  ratio now gives the same positive field noise as its magnitude
+  (before, a negative number).
+- `Ensemble` reports mismatched array lengths with `ValueError`
+  (before, a bare `assert`, which `python -O` removes).
+
+### Fixed
+
+- Tomography fit bias. With the weights taken from the measured sample
+  variances, angles whose variance came out low by chance were
+  weighted more, and the fit was biased low. Over 400 seeded
+  experiments with 9 angles x 20 shots (test
+  `test_model_weights_remove_the_weighting_bias`), the mean of
+  `(V1 + V2)/2` was 14.4 % low with the old weights and -0.2 % +/- 0.6 %
+  off with the new ones.
+- `dtwa.evolve` returned the moments at the step-grid point nearest to
+  each requested time, up to half a step away (`t = 0.37` was read at
+  `0.370075`, a rotation error of 1.3e-4 in spin units in the new
+  test). The interval between requested times is now split into whole
+  steps, so every requested time is hit exactly. Times must be finite
+  and >= 0.
+- New refusals (`ValueError`) for inputs that gave silent `nan`,
+  negative or unphysical results: a line width that is not finite and
+  positive (was `nan` detunings), `lorentz_fraction` outside [0, 1],
+  negative or non-finite ensemble occupations, an ensemble without
+  spins, fewer than one class, negative class probabilities,
+  non-finite cavity parameters, negative `kappa`, temperature or
+  dephasing, `kappa = Delta = 0`, `T2 <= 0` (a negative `T2` gave a
+  negative dephasing rate), a negative temperature or a non-positive
+  frequency in `thermal_occupation` (was a negative occupation), a
+  negative evolution time, `optimal_squeezing` limits that are not
+  `0 < t_lo < t_hi`, a clock or magnetometer projection with a
+  non-positive or non-finite phase noise, frequency, Ramsey time,
+  averaging time or gyromagnetic ratio (a negative `tau` gave `nan`),
+  `metrological_gain_db(xi2_R <= 0)`, a non-positive averaging time
+  for the Dick floor, and negative or non-finite trajectory-solver
+  times.
+
+### Behaviour changes
+
+- `estimate_squeezing` results change because of the new default
+  weights. README example 5 (4000 shots per angle): `xi2_R` 0.1421 ->
+  0.1420 (`xi2_R_sigma` 0.0043 in both), gain 8.47 dB -> 8.48 dB. With
+  few shots per angle the change is larger (see Fixed). With few shots
+  per angle the model weights cannot always be computed (the fitted
+  curve dips to zero or below at a measured angle, the reweighting does
+  not settle, or it ends with a minimal variance <= 0 where the sample
+  fit's is positive). The default then returns the `weighting="sample"`
+  (1.15) result, issues a `RuntimeWarning` and records the reason in
+  the new result field `weighting_fallback`; it refuses only datasets
+  that `weighting="sample"` refuses too. How often this happens, from a
+  seeded script (6 equally spaced angles, 300 Gaussian datasets per
+  row, variances 5/25 and 25/25 spin units squared, N = 100):
+
+  | shots per angle | refused, sample weights (= 1.15) | refused, new default | fell back to sample weights |
+  |---|---|---|---|
+  | 3  | 22.7 % / 22.7 % | 22.0 % / 20.7 % | 29.3 % / 26.7 % |
+  | 5  | 6.3 % / 4.0 %   | 5.3 % / 4.0 %   | 12.7 % / 11.0 % |
+  | 10 | 0.3 % / 0.0 %   | 0.3 % / 0.0 %   | 1.7 % / 1.3 %   |
+
+  (The new default can refuse slightly less often than the sample
+  weights, when the model-weighted fit is positive and the sample one is
+  not.) An intermediate version of this branch refused instead of
+  falling back, at 51.3 % / 47.3 % (3 shots), 18.0 % / 15.0 % (5) and
+  2.0 % / 1.3 % (10); it was not released.
+- Voigt lines: class detunings of a 16-class `equal_probability_classes`
+  discretization move by at most 1.5e-4 (`lorentz_fraction` 0.1),
+  2.0e-4 (0.3), 7.8e-5 (0.5) and 1.3e-4 (0.9) of their value. Gaussian
+  and Lorentzian lines are unchanged.
+- `dtwa.evolve`: moments are now at the exact times, and the step count
+  can rise slightly (408 instead of 400 steps in the one-axis-twisting
+  test, whose best squeezing moves from -14.1731 dB to -14.1736 dB;
+  exact -14.2020 dB).
+- Inputs listed under Fixed now raise instead of returning a number.
+  `clock_allan_deviation` and `total_clock_allan_deviation` now refuse
+  an infinite `dphi` (before, they returned `inf`).
+
+### Tests
+
+- 123 tests pass and 3 skip (1.15.1: 69 and 3; the 3 skipped need the
+  paper's companion scripts). New: `test_tomography_noise.py` (the
+  `Var(s^2)` identity by exact enumeration of a three-valued
+  distribution to 1e-12; the fixed-weight covariance against 3000
+  simulated fits to 10 % and against the usual matrix to 1e-12; the
+  weighting bias; the model-weighted covariance equal to
+  `plan_tomography` at the fitted values to 1e-9; empirical error bars
+  within 0.85-1.2 of the scatter for 5 % outlier shots, where the
+  Gaussian ones are too small by more than 1.5x; the coherent-state
+  bias of the smallest variance, 0.85-1.3 reported error bars against
+  the asymptotic sqrt(pi/3) = 1.02; the fallback to sample weights
+  returning exactly the sample result with one warning and refusing
+  only what sample weights refuse, over 200 seeded 3-shot datasets;
+  refusals), `test_inputs.py` (the
+  Voigt FWHM against a direct numerical convolution to 1e-9, its
+  limits and quantiles; every new refusal; accepted edge cases), and
+  `test_dtwa.py::test_moments_are_read_at_the_requested_times` (exact
+  rigid rotation to 1e-9; 1.15.1 is off by 1.3e-4).
+
 ## 1.15.1 (2026-09-22)
 
 A bug fix in the trajectory solver, wider CI coverage, and a rewritten
