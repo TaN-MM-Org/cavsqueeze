@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .measured import _check_contrast
+
 __all__ = ["plan_tomography", "shots_for_squeezing"]
 
 
@@ -47,9 +49,11 @@ def _expected_profile(angles, var_min, var_max, theta_min):
     return c - r * np.cos(2.0 * (th - float(theta_min))), th
 
 
-def plan_tomography(angles, shots_per_angle, var_min, var_max,
-                    theta_min=0.0, N=None, contrast=1.0,
-                    contrast_sigma=0.0, detection_variance=0.0):
+def plan_tomography(angles, shots_per_angle, var_min: float,
+                    var_max: float, theta_min: float = 0.0,
+                    N: int | None = None, contrast: float = 1.0,
+                    contrast_sigma: float = 0.0,
+                    detection_variance: float = 0.0) -> dict:
     """Predicted error bars of a planned tomography measurement.
 
     angles : (K,) planned tomography angles (radians).
@@ -81,8 +85,13 @@ def plan_tomography(angles, shots_per_angle, var_min, var_max,
     v_true, th = _expected_profile(angles, var_min, var_max, theta_min)
     if th.size < 1 or not np.all(np.isfinite(th)):
         raise ValueError("angles must be finite")
-    M = np.broadcast_to(np.asarray(shots_per_angle, dtype=int),
-                        th.shape).copy()
+    m_in = np.asarray(shots_per_angle, dtype=float)
+    if not (np.all(np.isfinite(m_in)) and np.all(m_in == np.floor(m_in))):
+        # before 1.17 a fractional count was truncated without a word
+        # (2.9 shots were planned as 2)
+        raise ValueError("shots_per_angle must be whole numbers; got "
+                         f"{shots_per_angle}")
+    M = np.broadcast_to(m_in.astype(int), th.shape).copy()
     if np.any(M < 2):
         raise ValueError("need at least 2 shots per angle")
     s2_raw = v_true + vdet                 # what the shots will show
@@ -113,9 +122,7 @@ def plan_tomography(angles, shots_per_angle, var_min, var_max,
     if N is not None:
         if not (isinstance(N, (int, np.integer)) and N >= 2):
             raise ValueError("N must be an integer >= 2")
-        if not (0.0 < contrast <= 1.0) or contrast_sigma < 0.0:
-            raise ValueError("contrast must lie in (0, 1] with a "
-                             "nonnegative sigma")
+        _check_contrast(contrast, contrast_sigma)
         xi2_S = 4.0 * var_min / N
         xi2_R = xi2_S / contrast ** 2
         out.update(
@@ -128,9 +135,12 @@ def plan_tomography(angles, shots_per_angle, var_min, var_max,
     return out
 
 
-def shots_for_squeezing(target_xi2_R_sigma, angles, var_min, var_max,
-                        N, contrast, contrast_sigma=0.0,
-                        theta_min=0.0, detection_variance=0.0):
+def shots_for_squeezing(target_xi2_R_sigma: float, angles,
+                        var_min: float, var_max: float, N: int,
+                        contrast: float, contrast_sigma: float = 0.0,
+                        theta_min: float = 0.0,
+                        detection_variance: float = 0.0
+                        ) -> tuple[int, dict]:
     """How many shots per angle does a target error bar cost?
 
     Exact inversion of the planned covariance: every per-angle weight

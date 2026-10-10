@@ -427,7 +427,16 @@ def evolve(st: State, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=None, me
     return [State.unpack(sol.y[:, k], M, spec(sol.t[k])) for k in range(sol.y.shape[1])]
 
 
-def evolve_meanfield(s, z, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=1e-11, method="DOP853"):
+def evolve_meanfield(s, z, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=1e-11,
+                     method="DOP853") -> tuple[np.ndarray, np.ndarray]:
+    """Evolve the mean-field equations (averages only, no correlations) for
+    time t >= 0, from the class averages s = <sigma+> and z = <sigma z>.
+    Returns (s, z) at t, or arrays of shape (M, len(t_eval)) at t_eval."""
+    if not (np.isfinite(t) and t >= 0):
+        # before 1.17 a negative t silently integrated backwards, which for a
+        # dissipative model returns an unphysical state (e.g. contrast e > 1
+        # after t = -T2)
+        raise ValueError(f"evolution time must be finite and >= 0; got {t}")
     y0 = np.concatenate([np.asarray(s, complex), np.asarray(z, complex)])
     sol = solve_ivp(_rhs_meanfield, (0.0, t), y0, args=(rt,), t_eval=t_eval, rtol=rtol, atol=atol, method=method)
     if not sol.success:

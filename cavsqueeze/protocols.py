@@ -89,13 +89,20 @@ def squeezing_trace(params: CavityParams, ens: Ensemble, t_list, echo: bool = Tr
 
 
 def optimal_squeezing(params: CavityParams, ens: Ensemble, t_lo: float, t_hi: float, echo: bool = True,
-                      weights=None, n_coarse: int = 12, points_per_period: int = 8, max_fine: int = 40, **kw):
+                      weights=None, n_coarse: int = 12, points_per_period: int = 8, max_fine: int = 40,
+                      **kw) -> dict:
     """Minimize xi^2 over the interaction time in [t_lo, t_hi].
 
-    Stage 1: a coarse geometric grid locates the envelope minimum t*.
-    Stage 2: a linear scan over [t*/2, 2 t*] with points_per_period samples per
-    gap period 2 pi / (chi N) (capped at max_fine points) resolves the
-    oscillations of the squeezing parameter at the collective gap frequency."""
+    Stage 1: a coarse geometric grid of n_coarse times locates the envelope
+    minimum t*.
+    Stage 2: a linear scan between the two coarse-grid neighbors of t* (the
+    end point itself when t* is the first or last grid point), with
+    points_per_period samples per gap period 2 pi / (chi N), at least 8 and
+    at most max_fine points, resolves the oscillations of the squeezing
+    parameter at the collective gap frequency.  (Docstrings before 1.17 said
+    the scan covered [t*/2, 2 t*]; the code has always used the neighbors.)
+    Returns the `squeezing_after` dict at the best time scanned, plus the
+    whole scan as scan_t and scan_xi2."""
     if not (np.isfinite(t_lo) and np.isfinite(t_hi) and 0 < t_lo < t_hi):
         raise ValueError(f"need 0 < t_lo < t_hi; got t_lo={t_lo}, t_hi={t_hi}")
     rt = Rates.from_params(params, ens)
@@ -180,11 +187,15 @@ def twist_untwist(params: CavityParams, ens: Ensemble, t: float, phi: float = 1e
                 contrast=np.linalg.norm(J0) / (S1 / 2))
 
 
-def plain_squeezed_readout(params: CavityParams, ens: Ensemble, t: float, sigma_det=0.0, echo=True, weights=None, **kw):
+def plain_squeezed_readout(params: CavityParams, ens: Ensemble, t: float, sigma_det=0.0, echo: bool = True,
+                           weights=None, **kw) -> dict:
     """Gain of a conventional squeezed-state Ramsey readout: after twisting, the
     squeezed quadrature is rotated to the measurement axis (J_y) and a phase
-    signal displaces the mean spin.  Gain = 1/(xi^2 + 4 sigma_det^2 / S2).
-    (The signal slope is |<J>| and the noise is the squeezed variance plus detection noise.)"""
+    signal displaces the mean spin.  The signal slope is |<J>| and the noise is
+    the squeezed variance plus detection noise, so
+        Gain = 1/(xi^2 + 4 sigma_det^2 / (S2 C^2)),   C = 2|<J>|/S1
+    (xi^2 is the Wineland parameter; before 1.17 this docstring left out the
+    contrast C, which the code has always included)."""
     rt = Rates.from_params(params, ens)
     st = twist(css_x(rt.M), rt, t, echo=echo, **kw)
     xi2, ang, vmin, vmax, Jn = wineland_xi2(st, rt.n, weights, spec_n=rt.spec_n)

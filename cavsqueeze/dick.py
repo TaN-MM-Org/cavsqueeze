@@ -44,11 +44,26 @@ answer by less than 1e-3.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import numpy as np
 
 __all__ = ["ramsey_sensitivity", "dick_fourier_coefficients",
            "dick_allan_deviation", "total_clock_allan_deviation",
            "power_law_psd", "synchronized_comparison"]
+
+
+def _check_timing(T, Tc, tp):
+    """Refuse an impossible Ramsey cycle.  Since 1.17 non-finite times are
+    refused too (before, a nan or infinite T_cycle, or a nan T_ramsey or
+    tau_pulse, passed the comparisons below and gave a nan Dick floor)."""
+    if not (np.isfinite(T) and np.isfinite(Tc) and np.isfinite(tp)):
+        raise ValueError(f"T_ramsey, T_cycle and tau_pulse must be finite (s); got "
+                         f"T_ramsey={T}, T_cycle={Tc}, tau_pulse={tp}")
+    if T <= 0 or tp < 0 or Tc < T + 2 * tp:
+        raise ValueError("need T_ramsey > 0, tau_pulse >= 0 and "
+                         "T_cycle >= T_ramsey + 2 tau_pulse "
+                         f"(got T_ramsey={T}, T_cycle={Tc}, tau_pulse={tp})")
 
 
 def _seg_E(k, t1, t2):
@@ -64,7 +79,8 @@ def _seg_sin(a, phi, w, t1, t2):
             - np.exp(-1j * phi) * _seg_E(-a - w, t1, t2)) / 2j
 
 
-def ramsey_sensitivity(t, T_ramsey, T_cycle, tau_pulse=0.0):
+def ramsey_sensitivity(t, T_ramsey: float, T_cycle: float,
+                       tau_pulse: float = 0.0) -> np.ndarray:
     """The Ramsey sensitivity function g(t) over one cycle.
 
     Layout: [0, tau_p] first pi/2 pulse (sin rise), [tau_p,
@@ -75,9 +91,7 @@ def ramsey_sensitivity(t, T_ramsey, T_cycle, tau_pulse=0.0):
     T = float(T_ramsey)
     tp = float(tau_pulse)
     Tc = float(T_cycle)
-    if T <= 0 or tp < 0 or Tc < T + 2 * tp:
-        raise ValueError("need T_ramsey > 0, tau_pulse >= 0 and "
-                         "T_cycle >= T_ramsey + 2 tau_pulse")
+    _check_timing(T, Tc, tp)
     tt = np.mod(t, Tc)
     g = np.zeros_like(tt)
     if tp > 0:
@@ -90,7 +104,9 @@ def ramsey_sensitivity(t, T_ramsey, T_cycle, tau_pulse=0.0):
     return g
 
 
-def dick_fourier_coefficients(m_max, T_ramsey, T_cycle, tau_pulse=0.0):
+def dick_fourier_coefficients(m_max: int, T_ramsey: float, T_cycle: float,
+                              tau_pulse: float = 0.0
+                              ) -> tuple[float, np.ndarray]:
     """(g0, g_m) of the Ramsey sensitivity function, exactly.
 
     g_m = (1/Tc) integral_0^Tc g(t) exp(-2 pi i m t / Tc) dt for
@@ -100,9 +116,7 @@ def dick_fourier_coefficients(m_max, T_ramsey, T_cycle, tau_pulse=0.0):
     T = float(T_ramsey)
     tp = float(tau_pulse)
     Tc = float(T_cycle)
-    if T <= 0 or tp < 0 or Tc < T + 2 * tp:
-        raise ValueError("need T_ramsey > 0, tau_pulse >= 0 and "
-                         "T_cycle >= T_ramsey + 2 tau_pulse")
+    _check_timing(T, Tc, tp)
     m_max = int(m_max)
     if m_max < 1:
         raise ValueError("m_max must be >= 1")
@@ -122,15 +136,17 @@ def dick_fourier_coefficients(m_max, T_ramsey, T_cycle, tau_pulse=0.0):
     return g0, gm
 
 
-def power_law_psd(h0=0.0, h_m1=0.0, h_m2=0.0):
+def power_law_psd(h0: float = 0.0, h_m1: float = 0.0,
+                  h_m2: float = 0.0) -> Callable[[np.ndarray], np.ndarray]:
     """One-sided fractional-frequency PSD S_y(f) = h0 + h_m1/f +
     h_m2/f^2 (white frequency, flicker frequency, random-walk
     frequency), the standard laboratory characterization of a clock
     laser. Returns a callable S_y(f_hz). Coefficients are YOUR
     laser's measured numbers; none are shipped."""
     h0, h_m1, h_m2 = float(h0), float(h_m1), float(h_m2)
-    if min(h0, h_m1, h_m2) < 0:
-        raise ValueError("PSD coefficients must be >= 0")
+    if not all(np.isfinite(h) and h >= 0 for h in (h0, h_m1, h_m2)):
+        raise ValueError("PSD coefficients must be finite and >= 0 "
+                         f"(got h0={h0}, h_m1={h_m1}, h_m2={h_m2})")
 
     def S_y(f):
         f = np.asarray(f, dtype=float)
@@ -139,8 +155,9 @@ def power_law_psd(h0=0.0, h_m1=0.0, h_m2=0.0):
     return S_y
 
 
-def dick_allan_deviation(S_y, tau, T_ramsey, T_cycle, tau_pulse=0.0,
-                         m_max=20000, tail_tol=1e-3):
+def dick_allan_deviation(S_y: Callable, tau: float, T_ramsey: float,
+                         T_cycle: float, tau_pulse: float = 0.0,
+                         m_max: int = 20000, tail_tol: float = 1e-3) -> float:
     """Dick-effect-limited fractional-frequency Allan deviation.
 
     S_y : callable, one-sided LO fractional-frequency PSD (1/Hz) --
@@ -149,8 +166,20 @@ def dick_allan_deviation(S_y, tau, T_ramsey, T_cycle, tau_pulse=0.0,
     tau : averaging time (s). T_ramsey, T_cycle, tau_pulse : the
         interrogation cycle (s).
     m_max : harmonic cutoff; the truncation is CHECKED, not hoped
-        for -- if the last decade of harmonics still contributes more
-        than `tail_tol` of the sum, the cutoff is refused as too low.
+        for: if the top 10 % of the harmonics (m > 0.9 m_max) still
+        contribute more than `tail_tol` of the sum, the cutoff is
+        refused as too low.  The check bounds the omitted remainder
+        only roughly: for terms falling as 1/m^2 (sharp pulse edges
+        with white frequency noise, the slowest decay a
+        `power_law_psd` spectrum gives) the harmonics beyond m_max
+        carry about 9 times what the top 10 % carry, so the relative
+        error of the Allan variance can reach
+        about 9 tail_tol.  At the default m_max and with instantaneous
+        pulses, the Allan variance for white frequency noise agrees with
+        its closed form h0 (1 - eta) / (2 eta tau),
+        eta = T_ramsey / T_cycle, to 6e-5 (tested for eta = 0.1, 0.4
+        and 0.9); the shortfall is the omitted remainder, about
+        1 / (pi^2 eta (1 - eta) m_max) of the total.
     """
     if not (np.isfinite(tau) and tau > 0):
         raise ValueError(f"tau must be finite and positive (s); got {tau}")
@@ -170,13 +199,16 @@ def dick_allan_deviation(S_y, tau, T_ramsey, T_cycle, tau_pulse=0.0,
         if tail > tail_tol * total:
             raise ValueError(
                 f"harmonic cutoff m_max = {m_max} is too low: the "
-                f"last decade of harmonics still carries "
+                f"top 10 % of the harmonics still carry "
                 f"{tail / total:.2%} of the sum. Raise m_max")
     return float(np.sqrt(total / float(tau)))
 
 
-def total_clock_allan_deviation(dphi, nu0, T_ramsey, tau, T_cycle,
-                                S_y=None, tau_pulse=0.0, m_max=20000):
+def total_clock_allan_deviation(dphi: float, nu0: float, T_ramsey: float,
+                                tau: float, T_cycle: float,
+                                S_y: Callable | None = None,
+                                tau_pulse: float = 0.0,
+                                m_max: int = 20000) -> dict:
     """Quantum projection noise and the Dick floor, combined.
 
     Returns dict(qpn, dick, total, dick_limited): the projection-
@@ -200,8 +232,9 @@ def total_clock_allan_deviation(dphi, nu0, T_ramsey, tau, T_cycle,
                 dick_limited=bool(dick > qpn))
 
 
-def synchronized_comparison(dphi_a, dphi_b, nu0, T_ramsey, tau,
-                            T_cycle=None):
+def synchronized_comparison(dphi_a: float, dphi_b: float, nu0: float,
+                            T_ramsey: float, tau: float,
+                            T_cycle: float | None = None) -> dict:
     """Two ensembles interrogated synchronously by ONE local
     oscillator: the Dick-free comparison (new in v1.15).
 

@@ -219,9 +219,15 @@ def product_classes(delta_dist, M_delta: int, weight_values, weight_probs, N: fl
     return Ensemble(delta=d, weight=w, n=n)
 
 
-def log_uniform_weights(dynamic_range: float, K: int):
+def log_uniform_weights(dynamic_range: float, K: int) -> tuple[np.ndarray, np.ndarray]:
     """K coupling weights spread log-uniformly over [1/sqrt(D), sqrt(D)] with
-    equal probability, normalized so that the mean weight is one."""
+    equal probability, then rescaled so that the mean weight is one (the
+    ratio of the largest to the smallest weight stays D).  D <= 1 or K = 1
+    gives a single weight 1.  Returns (weights, probabilities)."""
+    if not (isinstance(K, (int, np.integer)) and K >= 1):
+        raise ValueError(f"K must be an integer >= 1; got {K!r}")
+    if not np.isfinite(dynamic_range):
+        raise ValueError(f"dynamic_range must be finite; got {dynamic_range}")
     if dynamic_range <= 1.0 or K == 1:
         return np.ones(1), np.ones(1)
     logs = np.linspace(-0.5 * np.log(dynamic_range), 0.5 * np.log(dynamic_range), K)

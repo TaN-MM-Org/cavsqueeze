@@ -77,7 +77,10 @@ angle sets; and, since 1.16, the Var(s^2) identity by exact
 enumeration, the fixed-weight covariance against Monte Carlo, the
 model-weighted fit's lack of the sample-weight bias, empirical error
 bars matching the scatter of heavy-tailed shots, and the coherent-state
-V_min bias above.
+V_min bias above; since 1.17, the goodness-of-fit numbers (chi2, dof,
+p_value) of both fits against a recomputation from the shots, their
+chi-square law in seeded experiments, and their response to wrong
+angles or phases.
 """
 from __future__ import annotations
 
@@ -85,6 +88,7 @@ import dataclasses
 import warnings
 
 import numpy as np
+from scipy import stats
 
 __all__ = ["SqueezingEstimate", "estimate_squeezing",
            "variance_tomography", "ContrastEstimate",
@@ -118,6 +122,9 @@ class SqueezingEstimate:
     weighting_fallback : None, or why weighting="model" was requested
         but the fit fell back to sample weights (see
         `estimate_squeezing`).  New in 1.16.
+    chi2, dof, p_value : goodness of fit of the rotation law (new in
+        1.17; see `estimate_squeezing`).  dof = n_angles - 3; with 3
+        angles chi2 = 0 and p_value is nan.
     """
 
     xi2_S: float
@@ -142,10 +149,13 @@ class SqueezingEstimate:
     shot_noise: str = "gaussian"
     n_reweight: int = 0
     weighting_fallback: str | None = None
+    chi2: float = float("nan")
+    dof: int = 0
+    p_value: float = float("nan")
 
 
 def variance_tomography(angles, variances, variance_sigmas,
-                        error_sigmas=None):
+                        error_sigmas=None) -> dict:
     """Fit V(theta) = c + a cos 2theta + b sin 2theta by exact WLS.
 
     variance_sigmas set the fit weights 1/sigma^2.  By default they are
@@ -160,9 +170,11 @@ def variance_tomography(angles, variances, variance_sigmas,
     which equals the usual matrix when error_sigmas == variance_sigmas.
 
     Returns dict(c, a, b, cov (3, 3), var_min, var_max, var_min_sigma,
-    theta_min, V1, V2, C12).  Refuses fewer than 3 angles or an
-    angle set that is degenerate modulo pi (the three basis functions
-    must be independent on the design).
+    theta_min, V1, V2, C12, chi2, dof, p_value).  chi2, dof and p_value
+    (new in 1.17) test whether the variances follow the rotation law
+    within their errors; see `estimate_squeezing`.  Refuses fewer than
+    3 angles or an angle set that is degenerate modulo pi (the three
+    basis functions must be independent on the design).
     """
     th = np.asarray(angles, dtype=float).ravel()
     v = np.asarray(variances, dtype=float).ravel()
@@ -208,9 +220,46 @@ def variance_tomography(angles, variances, variance_sigmas,
     else:                       # isotropic: variance independent of theta
         g = np.array([1.0, 0.0, 0.0])
     var_min_sigma = float(np.sqrt(g @ cov @ g))
+    chi2, dof, p_value = _goodness_of_fit(
+        X, sg, sg if error_sigmas is None else es, v - X @ cab)
     return dict(c=c, a=a, b=b, cov=cov, var_min=var_min,
                 var_max=var_max, var_min_sigma=var_min_sigma,
-                theta_min=theta_min, V1=c + a, V2=c - a, C12=b)
+                theta_min=theta_min, V1=c + a, V2=c - a, C12=b,
+                chi2=chi2, dof=dof, p_value=p_value)
+
+
+def _goodness_of_fit(X, weight_sigmas, error_sigmas, resid,
+                     general=None):
+    """chi2, degrees of freedom and p-value of a linear weighted fit
+    (new in 1.17).
+
+    With the weights equal to the true errors this is the usual
+    sum (resid / sigma)^2.  Otherwise (``error_sigmas`` differ) it is the
+    quadratic form of the residuals in the pseudo-inverse of their exact
+    covariance (I - H) diag(error_sigmas^2) (I - H)^T, H = X (X^T W X)^-1
+    X^T W, which follows the same chi-square law with K - p degrees of
+    freedom for Gaussian errors and reduces to the usual sum when the
+    weights are the errors (an identity the tests check).  ``general``
+    forces one form or the other (for that test).
+    """
+    K, npar = X.shape
+    dof = int(K - npar)
+    if dof <= 0:
+        return 0.0, 0, float("nan")
+    if general is None:
+        general = not np.array_equal(weight_sigmas, error_sigmas)
+    if not general:
+        chi2 = float(np.sum((resid / error_sigmas) ** 2))
+    else:
+        w2 = 1.0 / weight_sigmas ** 2
+        Xw2 = X * w2[:, None]
+        L = np.linalg.solve(X.T @ Xw2, Xw2.T)        # (p, K): fit = L @ y
+        R = np.eye(K) - X @ L
+        Cr = (R * error_sigmas ** 2) @ R.T
+        Cr = 0.5 * (Cr + Cr.T)
+        chi2 = float(resid @ np.linalg.pinv(Cr, rcond=1e-10,
+                                            hermitian=True) @ resid)
+    return chi2, dof, float(stats.chi2.sf(chi2, dof))
 
 
 @dataclasses.dataclass
@@ -227,6 +276,9 @@ class ContrastEstimate:
     amplitude : fitted fringe amplitude N C / 2 (spin units).
     cov_abd : (3, 3) WLS covariance of the (A, B, d) linear fit.
     n_phases, shots_per_phase : data bookkeeping.
+    chi2, dof, p_value : goodness of fit of the fringe law (new in
+        1.17; see `estimate_contrast`).  dof = n_phases - 3; with 3
+        phases chi2 = 0 and p_value is nan.
     """
 
     contrast: float
@@ -238,9 +290,12 @@ class ContrastEstimate:
     cov_abd: np.ndarray
     n_phases: int
     shots_per_phase: np.ndarray
+    chi2: float = float("nan")
+    dof: int = 0
+    p_value: float = float("nan")
 
 
-def estimate_contrast(phases, shots, N) -> ContrastEstimate:
+def estimate_contrast(phases, shots, N: int) -> ContrastEstimate:
     """Fit the Ramsey fringe contrast from a phase-scan record --
     closing the loop `estimate_squeezing`'s docstring leaves open
     (new in v1.12).
@@ -258,6 +313,14 @@ def estimate_contrast(phases, shots, N) -> ContrastEstimate:
     contrast is C = 2 sqrt(A^2 + B^2) / N with its uncertainty by the
     delta method through the exact WLS covariance -- the same
     structure, and the same honesty, as `variance_tomography`.
+
+    The result also carries chi2, dof = n_phases - 3 and p_value (new
+    in 1.17): whether the mean J_z follows the fringe law within the
+    standard errors.  Since the law holds for any state, a small p_value
+    points at the measurement (wrong phase steps, a drift during the
+    scan, a nonlinear detector).  It assumes the per-phase means are
+    close to Gaussian with well-estimated standard errors, which needs
+    tens of shots per phase or more.
 
     Refusals instead of guesses: fewer than 3 distinct phases modulo
     2 pi (three basis functions need three quadratures), and a fitted
@@ -318,14 +381,27 @@ def estimate_contrast(phases, shots, N) -> ContrastEstimate:
     # overshoot above 1 is data, and rounding it down is the USER's
     # deliberate step before feeding estimate_squeezing (which
     # requires C <= 1), not this function's silent one
+    chi2, dof, p_value = _goodness_of_fit(X, sem, sem, mean - X @ abd)
     return ContrastEstimate(
         contrast=float(C), contrast_sigma=float(C_sigma),
         phi0=float(np.arctan2(B, A)), offset=float(d),
         offset_sigma=float(np.sqrt(cov[2, 2])), amplitude=float(r),
-        cov_abd=cov, n_phases=int(ph.size), shots_per_phase=M)
+        cov_abd=cov, n_phases=int(ph.size), shots_per_phase=M,
+        chi2=chi2, dof=dof, p_value=p_value)
 
 
-def sample_variance_sigma(shots, kurtosis=None):
+def _check_contrast(contrast, contrast_sigma):
+    """The contrast must lie in (0, 1] and its error be finite and >= 0.
+    (Before 1.17 a nan or infinite contrast_sigma was accepted and gave a
+    nan or infinite xi2_R_sigma without an error.)"""
+    if not (0.0 < contrast <= 1.0) or not (np.isfinite(contrast_sigma)
+                                           and contrast_sigma >= 0.0):
+        raise ValueError("contrast must lie in (0, 1] with a finite, "
+                         "nonnegative sigma; got contrast="
+                         f"{contrast}, contrast_sigma={contrast_sigma}")
+
+
+def sample_variance_sigma(shots, kurtosis: float | None = None) -> float:
     """Standard error of the unbiased sample variance of one shot array.
 
     For M independent shots from ANY distribution with variance
@@ -391,9 +467,11 @@ def _reweight(th, s2, vdet, gauss, fit, sig_s2):
         n_refit += 1
 
 
-def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
-                       detection_variance=0.0, weighting="model",
-                       shot_noise="gaussian") -> SqueezingEstimate:
+def estimate_squeezing(angles, shots, N: int, contrast: float,
+                       contrast_sigma: float = 0.0,
+                       detection_variance: float = 0.0,
+                       weighting: str = "model",
+                       shot_noise: str = "gaussian") -> SqueezingEstimate:
     """Estimate xi2_S and xi2_R from tomography shot records.
 
     Parameters
@@ -446,7 +524,24 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
         fixed-weight fit exactly (see `variance_tomography`'s
         ``error_sigmas``).  The point estimate is the same either way.
 
-    Returns a :class:`SqueezingEstimate`.
+    Returns a :class:`SqueezingEstimate`.  Its chi2, dof and p_value
+    (new in 1.17) say whether the measured variances follow the
+    rotation law V(theta) = c + a cos 2theta + b sin 2theta within their
+    error bars.  The law holds for any state, so a small p_value (say
+    below 0.01) points at the measurement: wrong or drifting rotation
+    angles, a state that changed between angles, or detection noise
+    that depends on the angle.  chi2 is the weighted sum of squared
+    residuals (with shot_noise="empirical", the residuals' quadratic
+    form in their exact covariance) and follows a chi-square law with
+    n_angles - 3 degrees of freedom when the sample variances are
+    close to Gaussian, which needs many shots per angle.  In the tests
+    (400 seeded experiments, 9 angles, 200 Gaussian shots per angle) the
+    fraction of p-values below 0.05 lies between 0.02 and 0.09 for both
+    shot_noise options, and angles that are 5 % larger than recorded
+    (12 angles, 2000 shots each) give p < 0.01.  With fewer shots the
+    law is approximate; with shot_noise="empirical" and few shots,
+    small p-values are more common than stated, because the measured
+    kurtosis is itself noisy.
     """
     th = np.asarray(angles, dtype=float).ravel()
     rows = [np.asarray(s, dtype=float).ravel() for s in shots]
@@ -458,9 +553,7 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
         raise ValueError("shots contain non-finite values")
     if not (isinstance(N, (int, np.integer)) and N >= 2):
         raise ValueError("N must be an integer >= 2")
-    if not (0.0 < contrast <= 1.0) or contrast_sigma < 0.0:
-        raise ValueError("contrast must lie in (0, 1] with a "
-                         "nonnegative sigma")
+    _check_contrast(contrast, contrast_sigma)
     vdet = float(detection_variance)
     if vdet < 0.0 or not np.isfinite(vdet):
         raise ValueError("detection_variance must be finite and >= 0")
@@ -527,4 +620,5 @@ def estimate_squeezing(angles, shots, N, contrast, contrast_sigma=0.0,
         contrast_sigma=float(contrast_sigma), N=int(N),
         detection_variance=vdet, n_angles=int(th.size),
         shots_per_angle=M, weighting=used, shot_noise=shot_noise,
-        n_reweight=int(n_refit), weighting_fallback=fallback)
+        n_reweight=int(n_refit), weighting_fallback=fallback,
+        chi2=fit["chi2"], dof=fit["dof"], p_value=fit["p_value"])

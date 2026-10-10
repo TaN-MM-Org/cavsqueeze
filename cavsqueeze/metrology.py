@@ -42,7 +42,7 @@ import numpy as np
 from .cumulant import State, collective_moments, transverse_variances
 
 
-def squeezing_parameters(st: State, n, weights=None, spec_n=None):
+def squeezing_parameters(st: State, n, weights=None, spec_n=None) -> dict:
     """Kitagawa-Ueda and Wineland parameters and their ingredients.
 
     Returns a dict with xi2_S, xi2_KU (alias), xi2_R, contrast (2|J|/S1),
@@ -69,6 +69,20 @@ def _check_positive(**kw):
     for name, v in kw.items():
         if not (np.isfinite(v) and v > 0):
             raise ValueError(f"{name} must be finite and positive; got {v}")
+
+
+def _cycle_time(T_ramsey: float, T_cycle: float | None) -> float:
+    """The cycle time (defaults to T_ramsey); refuses a non-finite one
+    (before 1.17 a nan T_cycle gave a nan result and an infinite one an
+    infinite result, without an error) or one shorter than T_ramsey."""
+    if T_cycle is None:
+        return T_ramsey
+    if not np.isfinite(T_cycle):
+        raise ValueError(f"T_cycle must be finite (s); got {T_cycle}")
+    if T_cycle < T_ramsey:
+        raise ValueError(f"T_cycle must be at least T_ramsey (got T_cycle={T_cycle}, "
+                         f"T_ramsey={T_ramsey})")
+    return T_cycle
 
 
 def metrological_gain_db(xi2_R: float) -> float:
@@ -98,9 +112,7 @@ def clock_allan_deviation(dphi: float, nu0: float, T_ramsey: float,
     cycle time (s, defaults to T_ramsey; dead time makes it larger).
     """
     _check_positive(dphi=dphi, nu0=nu0, T_ramsey=T_ramsey, tau=tau)
-    Tc = T_ramsey if T_cycle is None else T_cycle
-    if Tc < T_ramsey:
-        raise ValueError("T_cycle must be at least T_ramsey")
+    Tc = _cycle_time(T_ramsey, T_cycle)
     return float(dphi / (2.0 * np.pi * nu0 * T_ramsey) * np.sqrt(Tc / tau))
 
 
@@ -114,13 +126,11 @@ def magnetometer_sensitivity(dphi: float, gamma: float, T_ramsey: float,
     gives the same (positive) field uncertainty.
     """
     _check_positive(dphi=dphi, abs_gamma=abs(gamma), T_ramsey=T_ramsey, tau=tau)
-    Tc = T_ramsey if T_cycle is None else T_cycle
-    if Tc < T_ramsey:
-        raise ValueError("T_cycle must be at least T_ramsey")
+    Tc = _cycle_time(T_ramsey, T_cycle)
     return float(dphi / (abs(gamma) * T_ramsey) * np.sqrt(Tc / tau))
 
 
-def oat_closed_form(N: int, mu: float):
+def oat_closed_form(N: int, mu: float) -> dict:
     """Exact unitary one-axis-twisting moments (Kitagawa and Ueda,
     Phys. Rev. A 47, 5138 (1993)) for N spin-1/2 particles prepared in
     the coherent spin state along +x and evolved by U = exp(-i mu/2
@@ -144,10 +154,16 @@ def oat_closed_form(N: int, mu: float):
     Kitagawa-Ueda parameter and xi2_R the Wineland parameter
     xi2_S (N/2)^2 / <Jx>^2.
     """
+    # a non-integer N used to be truncated silently (N = 2.9 returned the
+    # N = 2 result); a whole number given as a float (100.0) is accepted
+    if not (np.isfinite(N) and float(N) == np.floor(N)):
+        raise ValueError(f"N must be a whole number of spins; got {N}")
     N = int(N)
     if N < 2:
         raise ValueError("one-axis twisting needs N >= 2 spins")
     mu = float(mu)
+    if not np.isfinite(mu):
+        raise ValueError(f"mu must be finite (rad); got {mu}")
     c, s = np.cos(mu / 2.0), np.sin(mu / 2.0)
     A = 1.0 - np.cos(mu) ** (N - 2)
     B = 4.0 * s * c ** (N - 2)
@@ -159,6 +175,6 @@ def oat_closed_form(N: int, mu: float):
     alpha_min = 0.5 * np.arctan2(-B, -A)
     xi2_S = Vmin / (N / 4.0)
     xi2_R = xi2_S * (N / 2.0) ** 2 / Jx ** 2 if Jx != 0.0 else np.inf
-    return dict(Jx=Jx, Vmin=float(Vmin), Vmax=float(Vmax),
+    return dict(Jx=float(Jx), Vmin=float(Vmin), Vmax=float(Vmax),
                 alpha_min=float(alpha_min), xi2_S=float(xi2_S),
                 xi2_R=float(xi2_R))
