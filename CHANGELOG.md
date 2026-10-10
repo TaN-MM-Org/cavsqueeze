@@ -1,5 +1,98 @@
 # Changelog
 
+## 1.17.0 (2026-10-10)
+
+Lab-data release: `T2` and the line width from a laboratory's own echo
+and Ramsey decays, a fit-quality test for the tomography and fringe
+fits, and refusals for inputs that returned wrong numbers or `nan`
+without an error. No result of a valid input changes.
+
+### Added
+
+- `fit_coherence_decay` / `DecayFit` (new module `cavsqueeze.decay`):
+  fits a measured echo decay `A exp(-t/T2)` (`line="none"`), or a
+  Ramsey decay with a Gaussian line, `A exp(-t/T2 - s^2 t^2/2)` with
+  `s = FWHM / (2 sqrt(2 ln 2))`, or a Lorentzian line,
+  `A exp(-(1/T2 + FWHM/2) t)`. Weighted nonlinear least squares on the
+  contrast, linearized error bars, a known `T2` with its error bar
+  propagated into the width, and `chi2`, `dof`, `p_value`. It refuses a
+  Lorentzian width without a known `T2` (only the sum of the two rates
+  can be measured), too few points, invalid inputs, and any fitted
+  rate or width less than `min_significance` (default 2) error bars
+  above zero. Results are in the units of `from_hz(T2=...)` and
+  `lineshape(..., fwhm)`. README example 10.
+- Fit quality for the measured-data fits: `SqueezingEstimate` and
+  `ContrastEstimate` gain `chi2`, `dof` and `p_value` (new fields with
+  defaults at the end, so existing code is unaffected), and
+  `variance_tomography` returns them too. With
+  `shot_noise="empirical"` the statistic is the quadratic form of the
+  residuals in the pseudo-inverse of their exact covariance, which
+  reduces to the usual weighted sum when the weights are the errors.
+  README example 11.
+
+### Fixed
+
+Each fix has a test in `tests/test_fixes_117.py` that fails on 1.16.0.
+
+- `oat_closed_form` truncated a number of spins that was not a whole
+  number: `oat_closed_form(2.9, 0.3)` returned the 2-spin result
+  (`xi2_S = 0.85056`), and `oat_closed_form(100.7, 0.05)` the 100-spin
+  one (`xi2_S = 0.12511`). Now `ValueError`; `100.0` is still accepted.
+  A non-finite `mu` (which gave `nan`) is refused too.
+- `plan_tomography` truncated fractional shot counts: 9.9 shots per
+  angle were planned as 9 (`var_min_sigma = 28.7227` for the 9-angle
+  test design, where 10 shots give 27.0800). Now `ValueError`.
+- `evolve_meanfield` accepted a negative time and integrated
+  backwards: with `T2 = 1 ms`, `t = -1 ms` returned a contrast of
+  2.7183 (`e`, a spin longer than 1). Now `ValueError`, as in `evolve`.
+- Silent `nan` or `inf` results, now `ValueError`: a `nan` or infinite
+  `contrast_sigma` in `estimate_squeezing` and `plan_tomography`
+  (`xi2_R_sigma` was `nan` or `inf`); a `nan` or infinite `T_cycle` in
+  `clock_allan_deviation`, `magnetometer_sensitivity`,
+  `total_clock_allan_deviation` and `synchronized_comparison` (`nan`,
+  or `inf` for an infinite cycle); a non-finite `T_ramsey`, `T_cycle`
+  or `tau_pulse` in the Dick functions (the floor was `nan`, and
+  `ramsey_sensitivity` returned zeros); non-finite `power_law_psd`
+  coefficients; `log_uniform_weights` with 0 weights (empty arrays) or
+  an infinite range (`nan` weights).
+
+### Changed
+
+- Docstrings corrected where they disagreed with the code:
+  `optimal_squeezing` (its fine scan runs between the neighbors of the
+  best coarse point, not over `[t*/2, 2 t*]`), `plain_squeezed_readout`
+  (the gain is `1/(xi2 + 4 sigma_det^2 / (S2 C^2))`; the contrast `C`
+  was missing), and `dick_allan_deviation` (the cutoff check looks at
+  the top 10 % of the harmonics, not the "last decade", and bounds the
+  omitted part only roughly: for terms falling as `1/m^2` the omitted
+  part is about 9 times the checked one). The cutoff error message now
+  says "top 10 %".
+- Error messages name the offending values (cycle and Ramsey times,
+  contrast and its error, laser-noise coefficients).
+- `oat_closed_form` returns `Jx` as a Python `float` (it was a NumPy
+  scalar; the value is identical).
+- Type hints on the public functions touched in this release.
+
+### Tests
+
+- 170 tests pass and 3 skip (1.16.0: 123 and 3; the 3 skipped need the
+  paper's companion scripts). New: `test_decay.py` (closed forms to
+  1e-9; the cumulant solver's echo decay gives back its `T2` to 1e-7
+  and the mean-field solver's Ramsey decay on a 20000-class Gaussian
+  line gives back its FWHM and `T2` to 5e-5; over 300 seeded datasets
+  the scatter is 0.8 to 1.2 times the reported error bars, with and
+  without a known `T2`, and the propagated `T2` term equals a
+  finite-difference refit to 2 %; a wrong model gives `p < 1e-6`;
+  refusals), `test_goodness_of_fit.py` (the reported `chi2` against the
+  residual sum recomputed from the shots to 1e-9; the general form
+  against the usual sum to 1e-10 and against the chi-square law by
+  Monte Carlo; uniform p-values with 200 shots per angle; 5 % angle or
+  phase errors flagged), `test_fixes_117.py` (above), and
+  `test_dick.py::test_white_frequency_noise_floor_matches_closed_form`
+  (the Dick floor for white frequency noise against
+  `h0 (1 - eta) / (2 eta tau)` to 6e-5, the shortfall being the omitted
+  harmonics, to 1e-6 of itself).
+
 ## 1.16.0 (2026-09-30)
 
 Measured-data release: less biased tomography fits, error bars that

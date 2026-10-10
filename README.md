@@ -26,6 +26,9 @@ It answers these questions:
 - How many shots does a measurement need to reach a target error bar,
   before it is taken? And how large is the error bar when the
   detector's noise is not Gaussian?
+- What coherence time `T2` and line width do my own echo and Ramsey
+  measurements give, so that I can put them into the model? And do my
+  measured data actually follow the laws the fits assume?
 - When does the noise of the clock laser (the Dick effect) make
   squeezing useless?
 
@@ -153,7 +156,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.16.0. All device values are illustrative
+with cavsqueeze 1.17.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -529,6 +532,109 @@ more than a factor 1.5, and the empirical one matches the actual
 scatter to within 20 %. `sample_variance_sigma(shots)` gives the same
 error bar for a single shot array.
 
+### 10. T2 and the line width from your own decays
+
+```python
+import numpy as np
+from cavsqueeze import fit_coherence_decay, from_hz, lineshape
+
+# Synthetic, seeded contrasts standing in for a measurement (for example
+# estimate_contrast at each time), each with error 0.01.  Truth: T2 = 5 ms,
+# a Gaussian line of FWHM 150 Hz, contrast 0.9 at t = 0.
+rng = np.random.default_rng(2)
+err = np.full(12, 0.01)
+s = 2 * np.pi * 150.0 / (2 * np.sqrt(2 * np.log(2)))    # line std, rad/s
+t_echo = np.linspace(1e-3, 15e-3, 12)                    # s, total echo time
+echo = 0.9 * np.exp(-t_echo / 5e-3) + rng.normal(0, 0.01, 12)
+t_ramsey = np.linspace(0.2e-3, 4e-3, 12)                 # s
+ramsey = (0.9 * np.exp(-t_ramsey / 5e-3 - 0.5 * (s * t_ramsey) ** 2)
+          + rng.normal(0, 0.01, 12))
+
+e = fit_coherence_decay(t_echo, echo, err)                  # echo: T2 only
+print(f"echo:   T2 = {e.T2 * 1e3:.2f} +/- {e.T2_sigma * 1e3:.2f} ms, "
+      f"p = {e.p_value:.2f}")
+r = fit_coherence_decay(t_ramsey, ramsey, err, line="gaussian",
+                        T2=e.T2, T2_sigma=e.T2_sigma)       # Ramsey: the line
+print(f"Ramsey: FWHM = {r.fwhm / (2 * np.pi):.1f} +/- "
+      f"{r.fwhm_sigma / (2 * np.pi):.1f} Hz, p = {r.p_value:.2f}")
+bad = fit_coherence_decay(t_ramsey, ramsey, err)            # wrong model
+print(f"Ramsey fitted without a line: p = {bad.p_value:.1e}")
+
+# The fitted values are the model's inputs (rates in rad/s, times in s):
+params = from_hz(g_hz=1e-4, kappa_hz=1e4, Delta_hz=30e6, T=0.02, T2=e.T2)
+line = lineshape("gaussian", r.fwhm)
+```
+
+```
+echo:   T2 = 5.05 +/- 0.09 ms, p = 0.24
+Ramsey: FWHM = 149.4 +/- 2.3 Hz, p = 0.98
+Ramsey fitted without a line: p = 4.8e-29
+```
+
+The model needs the dephasing rate `1/T2` and the line of the spin
+frequencies. `fit_coherence_decay` (new in 1.17) fits both from decays
+you measure. Measure them with the interaction switched off or too weak
+to matter on these time scales (for example with the cavity tuned far
+away); otherwise the fitted rates include the interaction.
+
+- An echo decays as `A exp(-t/T2)`, with `t` the total time of both
+  halves: the pi pulse removes the effect of the frequency spread, so
+  `line="none"` gives `T2`.
+- A Ramsey decay also contains the line. For a Gaussian line of FWHM
+  `F` (standard deviation `s = F / (2 sqrt(2 ln 2))`) it is
+  `A exp(-t/T2 - s^2 t^2 / 2)`; for a Lorentzian line of FWHM `F` it is
+  `A exp(-(1/T2 + F/2) t)`. The Ramsey fit takes `T2` and its error bar
+  from the echo fit and propagates that error into the width.
+
+The fit is a weighted least-squares fit of the contrast itself. Its
+error bars come from the curvature of the fit (the standard linear
+approximation); in the tests they match the scatter over 300 seeded
+datasets to 20 %. `chi2`, `dof` and `p_value` say whether the decay
+follows the formula within the error bars: the last line shows a
+Ramsey decay fitted without its Gaussian line, which the p-value
+rejects. The fit refuses a Lorentzian width without a known `T2`
+(only the sum `1/T2 + F/2` can be measured from a Ramsey decay) and
+any rate or width that is not at least two error bars above zero.
+The fitted values (in rad/s and s) go straight into `from_hz` and
+`lineshape`, as the last two lines show.
+
+### 11. Do the tomography data follow the rotation law?
+
+```python
+import numpy as np
+from cavsqueeze import estimate_squeezing
+
+# Synthetic tomography of a squeezed state (variances 5 and 40 in spin
+# units squared, N = 100), 12 angles, 2000 shots each.  In the second
+# record the rotation actually applied was 5 % larger than recorded.
+rng = np.random.default_rng(3)
+angles = np.linspace(0, np.pi, 12, endpoint=False)
+for label, applied in [("angles as recorded", angles),
+                       ("angles 5 % too large", 1.05 * angles)]:
+    var = 22.5 - 17.5 * np.cos(2 * (applied - 0.3))
+    shots = rng.normal(0, 1, (12, 2000)) * np.sqrt(var)[:, None]
+    est = estimate_squeezing(angles, shots, N=100, contrast=1.0)
+    print(f"{label:21s} xi2_S = {est.xi2_S:.4f} +/- {est.xi2_S_sigma:.4f}, "
+          f"chi2 = {est.chi2:4.1f} ({est.dof} dof), p = {est.p_value:.1g}")
+```
+
+```
+angles as recorded    xi2_S = 0.2048 +/- 0.0048, chi2 =  5.6 (9 dof), p = 0.8
+angles 5 % too large  xi2_S = 0.1979 +/- 0.0046, chi2 = 101.1 (9 dof), p = 9e-18
+```
+
+The variance at angle `theta` follows `c + a cos(2 theta) + b sin(2 theta)`
+for any state, so a fit that does not describe the data points at the
+measurement, not the state: wrong or drifting rotation angles, a state
+that changed between angles, or detection noise that depends on the
+angle. Since 1.17 `estimate_squeezing` reports `chi2`, its degrees of
+freedom (angles minus 3) and the p-value, and `estimate_contrast` does
+the same for the fringe. In the second record above the squeezing
+estimate looks normal, but `p` is tiny. The test assumes nearly
+Gaussian sample variances, which needs many shots per angle. In the
+tests, with 200 shots per angle, between 2 % and 9 % of 400 correct
+experiments give `p < 0.05` (5 % is expected).
+
 ## What is in the package
 
 Every name below is importable from `cavsqueeze` directly. Each
@@ -631,8 +737,15 @@ inputs, units and conventions.
   angle, 11-13 % with 5 and 1-2 % with 10.
 - `sample_variance_sigma` -- the error bar of one sample variance,
   from the measured kurtosis or a given one.
+- Fit quality (new in 1.17): `SqueezingEstimate` and `ContrastEstimate`
+  carry `chi2`, `dof` and `p_value`, which test whether the data follow
+  the rotation law or the fringe law (example 11); `variance_tomography`
+  returns the same three numbers.
 - `plan_tomography`, `shots_for_squeezing` -- predicted error bars and
   the shot count for a target.
+- `fit_coherence_decay` (returns `DecayFit`, new in 1.17): `T2` from
+  an echo decay, and the FWHM of a Gaussian or Lorentzian line from a
+  Ramsey decay, with error bars and a fit-quality test (example 10).
 
 **Bridge to QuTiP**
 
@@ -669,20 +782,29 @@ inputs, units and conventions.
   `T2` is not positive (new in 1.16; before, a negative `T2` gave a
   negative dephasing rate without an error);
 - an evolution time is negative, or `optimal_squeezing` gets limits
-  that do not satisfy `0 < t_lo < t_hi` (new in 1.16);
+  that do not satisfy `0 < t_lo < t_hi` (new in 1.16; since 1.17
+  `evolve_meanfield` refuses a negative or non-finite time too, where it
+  used to integrate backwards and return a contrast above 1);
 - a clock or magnetometer projection gets a phase noise, clock
   frequency, Ramsey time, averaging time or gyromagnetic ratio that is
   not finite and positive (only its size is used for the gyromagnetic
   ratio), `metrological_gain_db` gets `xi2_R <= 0`, or the Dick floor
   gets an averaging time that is not positive (new in 1.16; before,
   a negative `tau` returned `nan`);
-- `oat_closed_form` is asked for fewer than 2 spins;
+- `oat_closed_form` is asked for fewer than 2 spins, or (new in 1.17)
+  for a number of spins that is not a whole number (2.9 used to be
+  truncated to 2 without a word) or a twisting angle that is not
+  finite;
 - a clock or magnetometer cycle time `T_cycle` is shorter than the
-  Ramsey time;
+  Ramsey time, or (new in 1.17) not finite (before, `nan` or `inf` came
+  back as the result);
 - the Ramsey timing is impossible (`T_ramsey <= 0`, a negative pulse
-  length, or a cycle shorter than the Ramsey time plus two pulses), or
-  fewer than 1 harmonic is asked for;
-- laser noise coefficients are negative;
+  length, or a cycle shorter than the Ramsey time plus two pulses), any
+  of its times is not finite (new in 1.17; before, the Dick floor came
+  back as `nan`), or fewer than 1 harmonic is asked for;
+- laser noise coefficients are negative or (new in 1.17) not finite;
+- `log_uniform_weights` gets fewer than 1 weight or an infinite range
+  (new in 1.17);
 - the harmonic cutoff of `dick_allan_deviation` is too low: if the top
   10 % of the harmonics still carry more than `tail_tol` (default
   1e-3) of the sum, it asks for a larger `m_max` rather than returning
@@ -698,9 +820,10 @@ inputs, units and conventions.
   direction for the tomography; by a full turn for the fringe);
 - a shot array has fewer than 2 shots, non-finite values or zero
   scatter, or the number of shot arrays does not match the angles;
-- `N` is not a whole number of at least 2;
+- `N` given to the measured-data functions is not an integer (a Python
+  or NumPy integer; `100.0` is refused) of at least 2;
 - the contrast given to `estimate_squeezing` or `plan_tomography` is
-  not in (0, 1], or its error is negative;
+  not in (0, 1], or its error is negative or (new in 1.17) not finite;
 - the fitted fringe contrast exceeds 1 by more than two error bars
   (usually a wrong `N` or a `J_z` calibration problem; the message
   says so). A smaller overshoot is returned unclipped;
@@ -709,9 +832,17 @@ inputs, units and conventions.
 - a shot file is empty, has the wrong header, a row without exactly two
   fields, no data rows, or an angle with fewer than 2 shots; saving
   refuses repeated angles;
-- the planned variances do not satisfy `0 < var_min <= var_max`, or a
-  target error bar is not positive, uses a degenerate angle set, or is
-  below the contrast floor (example 6).
+- the planned variances do not satisfy `0 < var_min <= var_max`, the
+  planned shot counts are not whole numbers (new in 1.17; 9.9 used to
+  be planned as 9), or a target error bar is not positive, uses a
+  degenerate angle set, or is below the contrast floor (example 6);
+- `fit_coherence_decay` (new in 1.17) gets a Lorentzian line without a
+  known `T2`, `T2` together with `line="none"`, inputs of different
+  lengths, negative or non-finite times, non-finite contrasts, error
+  bars that are not finite and positive, too few points (one more than
+  the fitted parameters) or distinct times, or times that leave the
+  parameters undetermined; or when a fitted rate or width is not at
+  least `min_significance` (default 2) error bars above zero.
 
 Also: `evolve` raises `RuntimeError` if SciPy's integrator reports a
 failure, and a planned design with fewer than 3 distinct directions is
@@ -720,7 +851,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-123 tests run on every push to `main` and every pull request, on
+170 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -808,6 +939,12 @@ few minutes; most of it is one test of the trajectory solver.
   Ramsey time divided by the cycle time.
 - The floor scales as `1/sqrt(tau)` to 1e-12; doubling the harmonic
   cutoff changes it by less than 1e-3; too low a cutoff is refused.
+- For white frequency noise `S_y = h0` and instantaneous pulses, the
+  Allan variance equals the closed form `h0 (1 - eta) / (2 eta tau)`
+  (from the Fourier series `sum sin^2(m x)/m^2 = x (pi - x)/2`) to
+  6e-5 for `eta` = 0.1, 0.4 and 0.9, and the small shortfall equals the
+  harmonics left out above the default cutoff, about
+  `1 / (pi^2 eta (1 - eta) m_max)`, to 1e-6 of itself (new in 1.17).
 - With a noisy laser, about 10 dB of squeezing improves the total by
   less than 10 %; with a quiet laser, by more than 3 times.
 - `synchronized_comparison`: for two equal ensembles the difference is
@@ -854,6 +991,42 @@ few minutes; most of it is one test of the trajectory solver.
   (see [Limits](#limits)) is between 0.85 and 1.3 reported error bars
   over 400 experiments; the expected value for many shots is
   `sqrt(pi/3) = 1.02`.
+- Fit quality (new in 1.17): the reported `chi2` equals the weighted
+  sum of squared residuals recomputed in the test from the shots (to
+  1e-9), for the tomography with both weightings and for the fringe.
+  The general form used with `shot_noise="empirical"` equals the usual
+  sum when the weights are the errors (to 1e-10), and for Gaussian data
+  with other weights it follows the chi-square law (2000 seeded fits:
+  mean within 3 standard errors of the degrees of freedom, p-values
+  uniform by a Kolmogorov-Smirnov test). Over 400 seeded experiments
+  with 200 shots per angle (both `shot_noise` options) and 400 fringe
+  experiments, between 2 % and 9 % give `p < 0.05`. Rotation angles or
+  fringe phases 5 % larger than recorded give `p < 0.01` in each of 20
+  experiments.
+
+**Decay fits** (new in 1.17)
+
+- Noise-free echo, Gaussian-line and Lorentzian-line decays built from
+  the formulas are recovered to 1e-9.
+- The echo decay computed by the cumulant solver (a 2 kHz Gaussian
+  line in 16 classes, no interaction) gives back the `T2` given to
+  `from_hz` to 1e-7. The Ramsey decay computed by the mean-field solver
+  on a Gaussian line cut into 20000 classes gives back the FWHM given
+  to `lineshape` and the `T2` to 5e-5 (the limit set by the 20000
+  classes). This checks that the fitted numbers mean what the model's
+  inputs mean.
+- Over 300 seeded noisy datasets, the scatter of the fitted FWHM and
+  `1/T2` is between 0.8 and 1.2 times the reported error bar, with no
+  bias beyond 3 standard errors; the same holds for the Lorentzian
+  width with a known `T2`. The mean `chi2` is within 3 standard errors
+  of its degrees of freedom and 2 % to 9 % of the p-values are below
+  0.05.
+- With `T2` known only to +/- 0.2 ms, passing `T2_sigma` gives a width
+  error bar within 0.8 to 1.2 times the scatter; leaving it out makes
+  the error bar more than 1.3 times too small. The propagated term
+  equals a finite-difference refit to 2 %.
+- A Gaussian-line Ramsey decay fitted without the line gives
+  `p < 1e-6`.
 
 **Line shapes and inputs**
 
@@ -876,12 +1049,43 @@ few minutes; most of it is one test of the trajectory solver.
   export reproduces the covariance at 25 angles to 1e-4; a deliberately
   small Fock cutoff is caught.
 
+Each input that 1.16 accepted with a wrong or `nan` answer and 1.17
+refuses has a test (`tests/test_fixes_117.py`) that fails on 1.16.0.
 The remaining tests check refusals, further identities of the same
 functions, properties of the paper's pendulum model (the locking
 condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.17.0 refuses inputs that gave wrong numbers without an error.**
+No result of a valid input changes. The inputs that are now refused:
+
+- `oat_closed_form` truncated a number of spins that was not a whole
+  number: `oat_closed_form(2.9, 0.3)` returned the result for 2 spins
+  (`xi2_S = 0.8506`), and `oat_closed_form(100.7, 0.05)` the one for
+  100.
+- `plan_tomography` truncated a fractional shot count: 9.9 shots per
+  angle were planned as 9 (`var_min_sigma` 28.72 in the test design,
+  where 10 shots give 27.08).
+- `evolve_meanfield` integrated backwards for a negative time: with
+  `T2 = 1 ms` and `t = -1 ms` it returned a contrast of 2.718 (a spin
+  longer than 1). `evolve` already refused this.
+- A `nan` or infinite `contrast_sigma` gave a `nan` or infinite
+  `xi2_R_sigma`; a `nan` or infinite `T_cycle`, or a `nan` Ramsey or
+  pulse time, gave a `nan` or infinite clock instability or Dick floor;
+  `nan` or infinite laser-noise coefficients were accepted;
+  `log_uniform_weights` returned empty arrays for 0 weights and `nan`
+  weights for an infinite range.
+
+Docstrings that disagreed with the code were corrected: the fine scan
+of `optimal_squeezing` runs between the neighbors of the best coarse
+point (the docstring said `[t*/2, 2 t*]`); the gain formula of
+`plain_squeezed_readout` includes the contrast,
+`1/(xi2 + 4 sigma_det^2 / (S2 C^2))`; and the harmonic-cutoff check of
+`dick_allan_deviation` looks at the top 10 % of the harmonics (it said
+"last decade") and bounds the omitted part only roughly (see its
+docstring).
 
 **1.16.0 changed the tomography fit weights.** Each angle's sample
 variance is weighted by how precisely it is known, and that precision
@@ -957,6 +1161,17 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 - The continuous-measurement option does not condition the spectator
   spins of `tail_resolved_classes`; use a discretization without
   spectators with it.
+- `fit_coherence_decay` knows only the decays of this model: an
+  exponential echo decay and a Gaussian or Lorentzian line. Echo decays
+  in solids are often not exponential (spectral diffusion); a small
+  p-value says so, but the package has no model for it. A Voigt line
+  is not fitted. The fit's error bars are the standard linear
+  approximation, checked in the tests for decays sampled well past
+  their half point.
+- The `chi2` tests of the tomography and fringe fits assume nearly
+  Gaussian sample variances and means, which needs many shots per
+  angle (the tests use 200 to 2000). With `shot_noise="empirical"` and
+  few shots, small p-values are more common than stated.
 - By default the error bars of `estimate_squeezing` assume Gaussian
   shot noise, and heavy-tailed detection noise makes them too small;
   use `shot_noise="empirical"`. That option estimates the kurtosis of
