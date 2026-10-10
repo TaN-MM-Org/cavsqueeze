@@ -107,3 +107,21 @@ def test_squeezing_vs_dick_verdict():
     assert r0["dick"] == 0.0 and r0["total"] == r0["qpn"]
     assert abs(r0["qpn"] - cs.clock_allan_deviation(
         dphi_sql, nu0, T, 1.0, T_cycle=Tc)) < 1e-30
+
+
+@pytest.mark.parametrize("eta", [0.1, 0.4, 0.9])
+def test_white_frequency_noise_floor_matches_closed_form(eta):
+    """1.17: an anchor against a closed form.  With instantaneous pulses
+    |g_m / g_0|^2 = sin^2(pi m eta) / (pi m eta)^2, and the Fourier series
+    sum_{m>=1} sin^2(m x) / m^2 = x (pi - x) / 2 (0 <= x <= pi) gives, for
+    white frequency noise S_y = h0, the Dick-limited Allan variance
+    h0 (1 - eta) / (2 eta tau).  The default cutoff m_max = 20000 omits
+    about 1 / (pi^2 eta (1 - eta) m_max) of it (relative), which the
+    test also checks."""
+    h0, tau, Tc = 1e-30, 2.0, 1.0
+    got = cs.dick_allan_deviation(cs.power_law_psd(h0=h0), tau, eta * Tc, Tc) ** 2
+    exact = h0 * (1.0 - eta) / (2.0 * eta * tau)
+    rel = got / exact - 1.0
+    assert -6e-5 < rel < 0.0
+    omitted = 1.0 / (np.pi ** 2 * eta * (1.0 - eta) * 20000)
+    assert abs(-rel / omitted - 1.0) < 1e-6
