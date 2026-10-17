@@ -82,6 +82,10 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     vdet = float(detection_variance)
     if vdet < 0.0 or not np.isfinite(vdet):
         raise ValueError("detection_variance must be finite and >= 0")
+    if not np.isfinite(theta_min):
+        # before 1.18 a nan or infinite theta_min ended in numpy's
+        # LinAlgError ("SVD did not converge")
+        raise ValueError(f"theta_min must be finite (radians); got {theta_min}")
     v_true, th = _expected_profile(angles, var_min, var_max, theta_min)
     if th.size < 1 or not np.all(np.isfinite(th)):
         raise ValueError("angles must be finite")

@@ -254,10 +254,18 @@ def tail_resolved_classes(dist, N: float, M_core: int = 32, M_tail: int = 10, co
     """
     if fwhm is None:
         raise ValueError("fwhm (rad/s) is required")
+    _check_fwhm(fwhm)
+    for name, m in (("M_core", M_core), ("M_tail", M_tail), ("M_spec", M_spec)):
+        # before 1.18 M_core = 0 ended in ZeroDivisionError
+        if not (isinstance(m, (int, np.integer)) and m >= 1):
+            raise ValueError(f"{name} must be an integer >= 1; got {m!r}")
     if core_edge is None:
         core_edge = 3.0 * fwhm
     if delta_max is None:
         delta_max = 1000.0 * fwhm
+    if not (np.isfinite(core_edge) and np.isfinite(delta_max) and 0.0 < core_edge < delta_max):
+        raise ValueError("need 0 < core_edge < delta_max, both finite (rad/s); got "
+                         f"core_edge={core_edge}, delta_max={delta_max}")
     tail_end = delta_max if spectator_beyond is None else max(spectator_beyond, core_edge * 1.001)
     c_lo = float(dist.cdf(-core_edge))
     c_hi = float(dist.cdf(core_edge))

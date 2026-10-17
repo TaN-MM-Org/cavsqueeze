@@ -28,6 +28,18 @@ of the measurement; otherwise the fitted rates include them):
       Gaussian line:    C(t) = A exp(-gamma_phi t - s^2 t^2 / 2)
       Lorentzian line:  C(t) = A exp(-(gamma_phi + F_L / 2) t)
 
+  A Voigt line (new in 1.18) is the convolution of a Gaussian and a
+  Lorentzian, so its factor is the product of theirs (the Fourier
+  transform of a convolution is the product of the transforms):
+
+      Voigt line:       C(t) = A exp(-(gamma_phi + F_L / 2) t - s^2 t^2 / 2)
+
+  The fit returns the total FWHM of the Voigt profile (from the exact
+  profile, scipy.special.voigt_profile) and lorentz_fraction = F_L / FWHM,
+  the two numbers `lineshape("voigt", fwhm, lorentz_fraction)` takes.
+  The tests check it on decays computed by numerical Fourier integration
+  of that profile.
+
   A is the contrast at t = 0 (pulse errors and readout make it less
   than 1).  The tests check these forms against the package's own
   solvers (the cumulant solver with an echo, and the mean-field solver
@@ -44,11 +56,12 @@ freedom (points minus fitted parameters) and the p-value of a chi-square
 distribution with that many degrees of freedom.  A small p-value means
 the data do not follow the model within their error bars (for example a
 stretched-exponential echo decay from spectral diffusion, which this
-model does not contain).  In the tests, over 300 seeded noisy datasets,
+model does not contain; since 1.18 `fit_stretched_decay` fits that form
+and tests it against the exponential).  In the tests, over 300 seeded noisy datasets,
 the scatter of each fitted width and rate is 0.8 to 1.2 times its
 reported error bar, and 2 % to 9 % of the p-values fall below 0.05.
 
-Refusals, rather than numbers that look fine: a Lorentzian width
+Refusals, rather than numbers that look fine: a Lorentzian or Voigt width
 without a known T2 (in a Ramsey decay the Lorentzian part and gamma_phi
 both decay as exp(-rate t), so only their sum can be measured; fit an
 echo first and pass its T2), too few points, non-finite or non-positive
@@ -62,9 +75,9 @@ from __future__ import annotations
 import dataclasses
 
 import numpy as np
-from scipy import optimize, stats
+from scipy import optimize, special, stats
 
-__all__ = ["DecayFit", "fit_coherence_decay"]
+__all__ = ["DecayFit", "fit_coherence_decay", "StretchedDecayFit", "fit_stretched_decay"]
 
 _K_FWHM = 2.0 * np.sqrt(2.0 * np.log(2.0))   # Gaussian FWHM per standard deviation
 
@@ -74,7 +87,7 @@ class DecayFit:
     """Result of `fit_coherence_decay`.  All rates and widths are angular
     frequencies (rad/s), as everywhere in the package.
 
-    line : "none", "gaussian" or "lorentzian" (the model fitted).
+    line : "none", "gaussian", "lorentzian" or "voigt" (the model fitted).
     amplitude, amplitude_sigma : the contrast A at t = 0.
     gamma_phi, gamma_phi_sigma : the dephasing rate 1/T2 (rad/s);
         `CavityParams(gamma_phi=...)` takes it directly.
@@ -82,15 +95,23 @@ class DecayFit:
         takes it.  When T2 was given to the fit, these are the given
         values.
     fwhm, fwhm_sigma : FWHM of the line (rad/s), as `lineshape(line,
-        fwhm)` takes it; None for line="none".
+        fwhm)` takes it; None for line="none".  For line="voigt" (new in
+        1.18) the total FWHM of the Voigt line.
+    lorentz_fraction, lorentz_fraction_sigma : line="voigt" only (new in
+        1.18): the Lorentzian part's FWHM as a fraction of the total, as
+        `lineshape("voigt", fwhm, lorentz_fraction)` takes it.  None
+        otherwise.
+    fwhm_gaussian, fwhm_lorentzian : line="voigt" only (new in 1.18): the
+        FWHM of the Gaussian and of the Lorentzian part (rad/s).
     T2_given : whether T2 was given (and only the line was fitted).
     names, values, cov : the fitted parameters, in the model
         C(t) = A exp(-rate t - s2 t^2 / 2) (names among "A", "rate",
         "s2"; rate in rad/s, s2 in rad^2/s^2), and their covariance.
         With line="gaussian" and a given T2, the rate is fixed at 1/T2
         and the covariance includes the contribution of T2_sigma; with
-        line="lorentzian" the fitted rate is the total
-        1/T2 + fwhm/2, and T2_sigma enters fwhm_sigma only.
+        line="lorentzian" or "voigt" the fitted rate is the total
+        1/T2 + (Lorentzian FWHM)/2, and T2_sigma enters the line's error
+        bars only.
     chi2, dof, p_value : the fit quality (see the module docstring).
     n_points : number of data points.
     """
@@ -112,6 +133,35 @@ class DecayFit:
     dof: int
     p_value: float
     n_points: int
+    lorentz_fraction: float | None = None
+    lorentz_fraction_sigma: float | None = None
+    fwhm_gaussian: float | None = None
+    fwhm_lorentzian: float | None = None
+
+
+def _voigt_fwhm(sigma: float, gamma: float) -> float:
+    """Full width at half maximum (rad/s) of the Voigt profile with Gaussian
+    standard deviation sigma and Lorentzian half width gamma, from the exact
+    profile (scipy.special.voigt_profile) by root finding."""
+    if gamma == 0.0:
+        return float(_K_FWHM * sigma)
+    if sigma == 0.0:
+        return float(2.0 * gamma)
+    half = 0.5 * float(special.voigt_profile(0.0, sigma, gamma))
+    hi = gamma + sigma
+    while float(special.voigt_profile(hi, sigma, gamma)) >= half:
+        hi *= 2.0
+    x = optimize.brentq(lambda u: float(special.voigt_profile(u, sigma, gamma)) - half,
+                        0.0, hi, xtol=1e-15 * hi, rtol=1e-14)
+    return float(2.0 * x)
+
+
+def _voigt_width_and_fraction(gamma: float, s2: float) -> np.ndarray:
+    """(total FWHM, lorentz_fraction) of the Voigt line with Lorentzian half
+    width gamma and Gaussian variance s2, in the convention of
+    `lineshape("voigt", fwhm, lorentz_fraction)`."""
+    fwhm = _voigt_fwhm(float(np.sqrt(s2)), float(gamma))
+    return np.array([fwhm, 2.0 * gamma / fwhm])
 
 
 def _model(theta, names, fixed_rate, tau):
@@ -138,11 +188,15 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
         standard-deviation errors (for example `estimate_contrast` at
         each time).
     line : "none" (an echo, or the decay of a line much narrower than
-        1/T2), "gaussian" or "lorentzian" (a Ramsey decay of a line of
-        that shape).  See the module docstring for the formulas.
+        1/T2), "gaussian", "lorentzian" or "voigt" (new in 1.18; a
+        Ramsey decay of a line of that shape).  See the module docstring
+        for the formulas.  For "voigt" both the Lorentzian and the
+        Gaussian part must be resolved (at least ``min_significance``
+        error bars above zero), or the fit refuses and names the simpler
+        line to use.
     T2, T2_sigma : a known coherence time and its error (s), from an
-        echo fit with line="none".  Required for "lorentzian" (the only
-        way to separate the line from gamma_phi); optional for
+        echo fit with line="none".  Required for "lorentzian" and "voigt"
+        (the only way to separate the line from gamma_phi); optional for
         "gaussian", where it makes the fit more precise when the Ramsey
         decay itself barely resolves gamma_phi.  Its error is propagated
         into the fitted width (linearized: the change of the fit with
@@ -165,8 +219,9 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
         raise ValueError("contrast values must be finite")
     if not (np.all(np.isfinite(sg)) and np.all(sg > 0.0)):
         raise ValueError("contrast_sigma values must be finite and positive")
-    if line not in ("none", "gaussian", "lorentzian"):
-        raise ValueError(f"line must be 'none', 'gaussian' or 'lorentzian'; got {line!r}")
+    if line not in ("none", "gaussian", "lorentzian", "voigt"):
+        raise ValueError("line must be 'none', 'gaussian', 'lorentzian' or 'voigt'; "
+                         f"got {line!r}")
     if not (np.isfinite(min_significance) and min_significance >= 0.0):
         raise ValueError(f"min_significance must be finite and >= 0; got {min_significance}")
     if T2 is not None:
@@ -178,7 +233,7 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
         raise ValueError("T2_sigma is given without T2")
     if line == "none" and T2 is not None:
         raise ValueError("line='none' fits T2 itself; do not pass T2")
-    if line == "lorentzian" and T2 is None:
+    if line in ("lorentzian", "voigt") and T2 is None:
         raise ValueError(
             "a Lorentzian width cannot be separated from gamma_phi = 1/T2 in a "
             "Ramsey decay (both decay as exp(-rate t), so only their sum is "
@@ -187,6 +242,8 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
 
     if line == "gaussian":
         names = ("A", "s2") if T2 is not None else ("A", "rate", "s2")
+    elif line == "voigt":
+        names = ("A", "rate", "s2")
     else:
         names = ("A", "rate")
     npar = len(names)
@@ -253,7 +310,7 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
     p = dict(zip(names, values))
     ps = dict(zip(names, sig))
 
-    def resolved(name, value, sigma, label):
+    def resolved(name, value, sigma, label, hint=""):
         if not value > min_significance * sigma:
             raise ValueError(
                 f"the fitted {label} {value:.4g} +/- {sigma:.4g} is not "
@@ -262,7 +319,7 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
                 "contrast errors, or use a model without it" +
                 (" (for a Ramsey decay dominated by the line, fit an echo with "
                  "line='none' and pass its T2)" if name == "rate" and line == "gaussian"
-                 else ""))
+                 else "") + hint)
 
     fwhm = fwhm_sigma = None
     if T2 is None:
@@ -284,6 +341,37 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
         resolved("width", half, half_sigma,
                  "Lorentzian half width (total rate minus 1/T2, rad/s)")
         fwhm, fwhm_sigma = 2.0 * half, 2.0 * half_sigma
+    voigt = {}
+    if line == "voigt":
+        gam = p["rate"] - g_phi                    # Lorentzian half width
+        gam_sigma = float(np.sqrt(cov[1, 1] + g_phi_sigma ** 2))
+        resolved("width", gam, gam_sigma,
+                 "Lorentzian half width (total rate minus 1/T2, rad/s)",
+                 " (a Gaussian line: line='gaussian')")
+        resolved("s2", p["s2"], ps["s2"],
+                 "Gaussian variance of the line (rad^2/s^2)",
+                 " (a Lorentzian line: line='lorentzian')")
+        # covariance of (gamma, s2): the fit's, plus the independent error
+        # of the given 1/T2 in gamma
+        cgs = np.array([[cov[1, 1] + g_phi_sigma ** 2, cov[1, 2]],
+                        [cov[2, 1], cov[2, 2]]])
+        x0 = np.array([gam, p["s2"]])
+        out = _voigt_width_and_fraction(*x0)
+        # gradient by central differences of the exact width (a smooth
+        # function; steps of 1e-6 of each value)
+        jac = np.empty((2, 2))
+        for i in range(2):
+            h = 1e-6 * x0[i]
+            up, dn = x0.copy(), x0.copy()
+            up[i] += h
+            dn[i] -= h
+            jac[:, i] = (_voigt_width_and_fraction(*up) - _voigt_width_and_fraction(*dn)) / (2 * h)
+        cov_out = jac @ cgs @ jac.T
+        fwhm, fwhm_sigma = float(out[0]), float(np.sqrt(cov_out[0, 0]))
+        voigt = dict(lorentz_fraction=float(out[1]),
+                     lorentz_fraction_sigma=float(np.sqrt(cov_out[1, 1])),
+                     fwhm_gaussian=float(_K_FWHM * np.sqrt(p["s2"])),
+                     fwhm_lorentzian=float(2.0 * gam))
 
     r = resid(theta)
     chi2 = float(r @ r)
@@ -296,4 +384,160 @@ def fit_coherence_decay(times, contrast, contrast_sigma, line: str = "none",
         fwhm_sigma=None if fwhm_sigma is None else float(fwhm_sigma),
         T2_given=T2 is not None, names=names, values=values, cov=cov,
         chi2=chi2, dof=dof, p_value=float(stats.chi2.sf(chi2, dof)),
-        n_points=int(t.size))
+        n_points=int(t.size), **voigt)
+
+
+@dataclasses.dataclass
+class StretchedDecayFit:
+    """Result of `fit_stretched_decay` (new in 1.18).
+
+    amplitude, amplitude_sigma : the contrast A at t = 0.
+    T_M, T_M_sigma : the time at which the decay has fallen to A/e (s).
+    exponent, exponent_sigma : the stretch exponent x of
+        A exp(-(t / T_M)^x); x = 1 is the exponential decay of the model.
+    cov : (3, 3) covariance of (A, T_M, x).
+    chi2, dof, p_value : fit quality of the stretched form (dof = points
+        minus 3).
+    chi2_exponential, delta_chi2, p_exponential : the same data fitted with
+        x fixed at 1 (the exponential decay `fit_coherence_decay` fits with
+        line="none"), the drop in chi2 when x is freed, and the p-value of
+        that drop for one degree of freedom.  A small p_exponential says the
+        decay is not exponential.
+    n_points : number of data points.
+    """
+
+    amplitude: float
+    amplitude_sigma: float
+    T_M: float
+    T_M_sigma: float
+    exponent: float
+    exponent_sigma: float
+    cov: np.ndarray
+    chi2: float
+    dof: int
+    p_value: float
+    chi2_exponential: float
+    delta_chi2: float
+    p_exponential: float
+    n_points: int
+
+
+def _stretched(theta, tau):
+    """A exp(-(tau/u)^x) and its Jacobian in (A, u, x), tau = t / t_max."""
+    A, u, x = theta
+    r = tau / u
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lr = np.where(r > 0.0, np.log(np.where(r > 0.0, r, 1.0)), 0.0)
+    q = np.where(r > 0.0, r ** x, 0.0)
+    e = np.exp(-q)
+    f = A * e
+    jac = np.column_stack([e, f * q * x / u, -f * q * lr])
+    return f, jac
+
+
+def fit_stretched_decay(times, contrast, contrast_sigma,
+                        min_significance: float = 2.0) -> StretchedDecayFit:
+    """Fit a measured echo decay with the stretched exponential
+    C(t) = A exp(-(t / T_M)^x) (new in 1.18).
+
+    In solids the echo decay is often not exponential: spectral diffusion
+    gives decays of this stretched form, with x > 1.  The form
+    exp(-(2 tau / T_M)^x) (2 tau the total echo time, here t) is the one
+    used for rare-earth spin and optical echoes, for example by M. Le Dantec
+    et al., arXiv:2106.14974 (2021) (who fit its square, the echo
+    intensity), citing T. Bottger, C. W. Thiel, Y. Sun and R. L. Cone,
+    Phys. Rev. B 73, 075101 (2006).
+
+    This package's model has only Markovian dephasing, which gives x = 1
+    (`fit_coherence_decay` with line="none").  This fit measures x and
+    tests x = 1: if p_exponential is small, the echo is not exponential,
+    and T2 = 1/gamma_phi from an exponential fit is not a parameter of the
+    model but an average over a decay it does not describe.  T_M is then
+    the 1/e time of the measured decay.
+
+    times, contrast, contrast_sigma : as in `fit_coherence_decay` (times in
+        s, >= 0; contrast errors finite and positive).
+    min_significance : T_M and x must each lie at least this many error
+        bars above zero, or the fit refuses (default 2).
+
+    The fit is weighted nonlinear least squares on C(t); error bars come
+    from the inverse curvature matrix (the standard linearized result) and
+    assume the given contrast errors are right.  delta_chi2 follows a
+    chi-square law with one degree of freedom when x = 1 holds and the
+    errors are Gaussian (checked by Monte Carlo in the tests).  Refusals:
+    fewer than 4 points or 3 distinct times, invalid inputs, a decay that
+    the times do not sample (the fit does not converge, or the curvature
+    matrix is singular), and an exponent or T_M not resolved.
+    """
+    t = np.asarray(times, dtype=float).ravel()
+    y = np.asarray(contrast, dtype=float).ravel()
+    sg = np.asarray(contrast_sigma, dtype=float).ravel()
+    if not (t.shape == y.shape == sg.shape):
+        raise ValueError("times, contrast and contrast_sigma must have the same "
+                         f"length (got {t.size}, {y.size}, {sg.size})")
+    if not (np.all(np.isfinite(t)) and np.all(t >= 0.0)):
+        raise ValueError("times must be finite and >= 0 (s)")
+    if not np.all(np.isfinite(y)):
+        raise ValueError("contrast values must be finite")
+    if not (np.all(np.isfinite(sg)) and np.all(sg > 0.0)):
+        raise ValueError("contrast_sigma values must be finite and positive")
+    if not (np.isfinite(min_significance) and min_significance >= 0.0):
+        raise ValueError(f"min_significance must be finite and >= 0; got {min_significance}")
+    if t.size < 4:
+        raise ValueError(f"need at least 4 points to fit 3 parameters and test the fit; got {t.size}")
+    if np.unique(t[t > 0.0]).size < 3:
+        raise ValueError("need at least 3 distinct times > 0")
+
+    # the exponential fit (x = 1) by the 1.17 routine: the starting point,
+    # and the reference for the test of x = 1
+    try:
+        expo = fit_coherence_decay(t, y, sg, line="none", min_significance=0.0)
+    except ValueError as err:
+        raise ValueError(f"the decay is not sampled well enough to fit: {err}") from None
+    ts = float(t.max())
+    tau = t / ts
+
+    def resid(theta):
+        return (_stretched(theta, tau)[0] - y) / sg
+
+    def jac(theta):
+        return _stretched(theta, tau)[1] / sg[:, None]
+
+    u0 = 1.0 / max(expo.gamma_phi * ts, 1e-6)
+    res = optimize.least_squares(resid, np.array([expo.amplitude, u0, 1.0]), jac=jac,
+                                 method="trf", bounds=([-np.inf, 1e-9, 1e-3], [np.inf, np.inf, 50.0]),
+                                 xtol=1e-15, ftol=1e-15, gtol=1e-15, max_nfev=20000)
+    if res.status <= 0:
+        raise ValueError(f"the stretched fit did not converge: {res.message}")
+    theta = res.x
+    if theta[2] <= 1e-3 * 1.001 or theta[2] >= 50.0 * 0.999 or theta[1] <= 1e-9 * 1.001:
+        raise ValueError("the fit ran into the limits of the exponent (0.001 to 50) or of "
+                         "T_M: these times do not sample the decay; measure through it")
+    Jw = jac(theta)
+    F = Jw.T @ Jw
+    sv = np.linalg.svd(F, compute_uv=False)
+    if not (sv[-1] > 1e-12 * sv[0]):
+        raise ValueError("A, T_M and the exponent are not separately determined by these "
+                         "times (the curvature matrix is singular); spread the times "
+                         "over the decay")
+    scale = np.array([1.0, ts, 1.0])
+    cov = np.linalg.inv(F) * np.outer(scale, scale)
+    cov = 0.5 * (cov + cov.T)
+    values = theta * scale
+    sig = np.sqrt(np.diag(cov))
+    for k, label in ((1, "decay time T_M (s)"), (2, "stretch exponent")):
+        if not values[k] > min_significance * sig[k]:
+            raise ValueError(f"the fitted {label} {values[k]:.4g} +/- {sig[k]:.4g} is not "
+                             f"{min_significance:g} error bars above zero: these data do "
+                             "not resolve it")
+    r = resid(theta)
+    chi2 = float(r @ r)
+    dof = int(t.size - 3)
+    dchi2 = max(expo.chi2 - chi2, 0.0)
+    return StretchedDecayFit(
+        amplitude=float(values[0]), amplitude_sigma=float(sig[0]),
+        T_M=float(values[1]), T_M_sigma=float(sig[1]),
+        exponent=float(values[2]), exponent_sigma=float(sig[2]), cov=cov,
+        chi2=chi2, dof=dof, p_value=float(stats.chi2.sf(chi2, dof)),
+        chi2_exponential=float(expo.chi2), delta_chi2=float(dchi2),
+        p_exponential=float(stats.chi2.sf(dchi2, 1)), n_points=int(t.size))

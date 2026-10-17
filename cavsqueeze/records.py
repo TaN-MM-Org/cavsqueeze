@@ -27,11 +27,13 @@ __all__ = ["load_shots_csv", "save_shots_csv"]
 _HEADER = ("angle_rad", "jz")
 
 
-def save_shots_csv(path, angles, shots):
+def save_shots_csv(path, angles, shots) -> None:
     """Write a shot record in the documented contract.
 
-    angles : (K,) angles (radians). shots : length-K sequence of
-    per-angle shot arrays (or a (K, M) array), J_z in spin units.
+    angles : (K,) distinct, finite angles (radians). shots : length-K
+    sequence of per-angle shot arrays (or a (K, M) array), J_z in spin
+    units, at least 2 finite shots per angle (since 1.18 anything else is
+    refused, so that every saved file loads back exactly).
     """
     th = np.asarray(angles, dtype=float).ravel()
     rows = [np.asarray(s, dtype=float).ravel() for s in shots]
@@ -40,6 +42,18 @@ def save_shots_csv(path, angles, shots):
     if len(set(float(t) for t in th)) != th.size:
         raise ValueError("angles must be distinct (shots for one "
                          "angle belong in one array)")
+    # Since 1.18 a record that load_shots_csv would not give back is
+    # refused here.  Before, an angle with no shots was dropped from the
+    # file without a word (3 angles saved, 2 loaded), and an angle with one
+    # shot or a nan angle was written but could not be loaded.
+    if not np.all(np.isfinite(th)):
+        raise ValueError("angles must be finite (radians)")
+    for t, r in zip(th, rows):
+        if r.size < 2:
+            raise ValueError(f"angle {t!r} has {r.size} shot(s); at least 2 "
+                             "are needed for a variance or a standard error")
+        if not np.all(np.isfinite(r)):
+            raise ValueError(f"angle {t!r} has non-finite shots")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(_HEADER)

@@ -14,10 +14,10 @@ from .measured import (ContrastEstimate, SqueezingEstimate,
                        sample_variance_sigma, variance_tomography)
 from .records import load_shots_csv, save_shots_csv
 from .lab import plan_tomography, shots_for_squeezing
-from .decay import DecayFit, fit_coherence_decay
+from .decay import DecayFit, StretchedDecayFit, fit_coherence_decay, fit_stretched_decay
 from .dick import (dick_allan_deviation, dick_fourier_coefficients,
                    power_law_psd, ramsey_sensitivity,
                    synchronized_comparison,
                    total_clock_allan_deviation)
 
-__version__ = "1.17.0"
+__version__ = "1.18.0"

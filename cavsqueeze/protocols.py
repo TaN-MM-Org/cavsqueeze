@@ -107,41 +107,70 @@ def optimal_squeezing(params: CavityParams, ens: Ensemble, t_lo: float, t_hi: fl
         raise ValueError(f"need 0 < t_lo < t_hi; got t_lo={t_lo}, t_hi={t_hi}")
     rt = Rates.from_params(params, ens)
     ts = np.geomspace(t_lo, t_hi, n_coarse)
-    vals = np.array([squeezing_after(params, ens, t, echo=echo, weights=weights, **kw)["xi2"] for t in ts])
+    coarse = [squeezing_after(params, ens, t, echo=echo, weights=weights, **kw) for t in ts]
+    vals = np.array([r["xi2"] for r in coarse])
     k = int(np.argmin(vals))
     lo, hi = ts[max(k - 1, 0)], ts[min(k + 1, len(ts) - 1)]
     period = 2 * np.pi / max(abs(rt.chiN), 1e-30)
     n_fine = int(np.clip(np.ceil((hi - lo) / period * points_per_period), 8, max_fine))
     tf = np.linspace(lo, hi, n_fine)
-    vf = np.array([squeezing_after(params, ens, t, echo=echo, weights=weights, **kw)["xi2"] for t in tf])
+    fine = [squeezing_after(params, ens, t, echo=echo, weights=weights, **kw) for t in tf]
+    vf = np.array([r["xi2"] for r in fine])
     all_t = np.concatenate([ts, tf])
     all_v = np.concatenate([vals, vf])
     j = int(np.nanargmin(all_v))
-    best = squeezing_after(params, ens, float(all_t[j]), echo=echo, weights=weights, **kw)
+    # the scan already holds the result at the best time (before 1.18 it
+    # was computed a second time; the solver is deterministic, so the
+    # numbers are the same)
+    best = dict((coarse + fine)[j])
+    best["t"] = float(all_t[j])
     best["scan_t"] = all_t
     best["scan_xi2"] = all_v
     return best
 
 
-def ramsey_cumulant(params: CavityParams, ens: Ensemble, t_list, **kw):
-    """Ramsey (no echo) evolution returning contrast and transverse variances versus time."""
+def _sorted_times(t_list):
+    """(sorted times, order) for a list of output times in any order.
+    Before 1.18 the Ramsey functions integrated up to the LAST listed time,
+    so with t_list = [1e-3, 0.0] ramsey_cumulant returned the t = 0
+    contrast 1.0 for t = 1 ms (and ramsey_meanfield raised a SciPy error)."""
+    t = np.asarray(t_list, dtype=float).ravel()
+    if t.size == 0 or not np.all(np.isfinite(t)) or np.any(t < 0):
+        raise ValueError("t_list must be a non-empty list of finite times >= 0 (s)")
+    order = np.argsort(t, kind="stable")
+    return t[order], order
+
+
+def ramsey_cumulant(params: CavityParams, ens: Ensemble, t_list, **kw) -> dict:
+    """Ramsey (no echo) evolution from the coherent spin state along +x:
+    contrast, Wineland parameter xi2 and transverse variances var_min,
+    var_max at each time of ``t_list`` (s, any order, returned in the
+    order given)."""
+    ts, order = _sorted_times(t_list)
     rt = Rates.from_params(params, ens)
-    sts = evolve(css_x(rt.M), rt, float(t_list[-1]), t_eval=t_list, **kw)
-    coh = np.array([coherence(s, rt.n, spec_n=rt.spec_n) for s in sts])
-    xi = np.array([wineland_xi2(s, rt.n, spec_n=rt.spec_n) for s in sts])
-    return dict(t=np.asarray(t_list), contrast=coh, xi2=xi[:, 0], var_min=xi[:, 2], var_max=xi[:, 3])
+    sts = evolve(css_x(rt.M), rt, float(ts[-1]), t_eval=ts, **kw)
+    coh = np.empty(ts.size)
+    xi = np.empty((ts.size, 5))
+    coh[order] = [coherence(s, rt.n, spec_n=rt.spec_n) for s in sts]
+    xi[order] = [wineland_xi2(s, rt.n, spec_n=rt.spec_n) for s in sts]
+    return dict(t=np.asarray(t_list, dtype=float).ravel(), contrast=coh, xi2=xi[:, 0],
+                var_min=xi[:, 2], var_max=xi[:, 3])
 
 
-def ramsey_meanfield(params: CavityParams, ens: Ensemble, t_list, **kw):
+def ramsey_meanfield(params: CavityParams, ens: Ensemble, t_list, **kw) -> dict:
+    """Ramsey (no echo) contrast from the mean-field equations at each time
+    of ``t_list`` (s, any order, returned in the order given)."""
+    ts, order = _sorted_times(t_list)
     rt = Rates.from_params(params, ens)
     s0 = np.full(rt.M, 0.5, complex)
     z0 = np.zeros(rt.M, complex)
-    s, z = evolve_meanfield(s0, z0, rt, float(t_list[-1]), t_eval=t_list, **kw)
+    s, z = evolve_meanfield(s0, z0, rt, float(ts[-1]), t_eval=ts, **kw)
     Ntot = rt.N + rt.spec_n.sum()
-    ph = np.outer(rt.spec_delta, np.asarray(t_list))
-    spec = 0.5 * np.exp(1j * ph) * np.exp(-rt.gamma_phi * np.asarray(t_list))
-    coh = 2.0 * np.abs(rt.n @ s + rt.spec_n @ spec) / Ntot
-    return dict(t=np.asarray(t_list), contrast=coh)
+    ph = np.outer(rt.spec_delta, ts)
+    spec = 0.5 * np.exp(1j * ph) * np.exp(-rt.gamma_phi * ts)
+    coh = np.empty(ts.size)
+    coh[order] = 2.0 * np.abs(rt.n @ s + rt.spec_n @ spec) / Ntot
+    return dict(t=np.asarray(t_list, dtype=float).ravel(), contrast=coh)
 
 
 def twist_untwist(params: CavityParams, ens: Ensemble, t: float, phi: float = 1e-6, echo: bool = True,

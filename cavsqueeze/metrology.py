@@ -142,9 +142,13 @@ def oat_closed_form(N: int, mu: float) -> dict:
         <Jz^2>   = N/4                    (Jz is conserved)
         V(+/-)   = N/4 + N(N-1)/16 [A +/- sqrt(A^2 + B^2)]
 
-    are exact for all N and mu; every one of these lines is asserted
-    against brute-force exact evolution in the tests rather than
-    trusted. Decoherence-free and homogeneous by construction: this is
+    are exact for all N and mu.  The tests compare <Jx>, <Jz^2> and the
+    variance at alpha_min with brute-force exact evolution for N = 2, 5
+    and 8 to 1e-12 (the extremal variances on an angle grid to 1e-4).
+    Since 1.18 the formulas are evaluated in a form that keeps its
+    accuracy for many spins (see the comments in the code): Vmin agrees
+    with a 60-digit evaluation to 1e-9 up to N = 1e9 and with exact
+    Dicke-basis evolution at N = 1e6 to 1e-8. Decoherence-free and homogeneous by construction: this is
     the benchmark the dissipative cumulant solver is compared against,
     not a substitute for it.
 
@@ -165,13 +169,35 @@ def oat_closed_form(N: int, mu: float) -> dict:
     if not np.isfinite(mu):
         raise ValueError(f"mu must be finite (rad); got {mu}")
     c, s = np.cos(mu / 2.0), np.sin(mu / 2.0)
-    A = 1.0 - np.cos(mu) ** (N - 2)
-    B = 4.0 * s * c ** (N - 2)
+    if np.cos(mu) > 0.0:
+        # Since 1.18 the powers are formed from log1p of sin^2(mu/2), and
+        # A - sqrt(A^2 + B^2) as -B^2 / (A + sqrt(A^2 + B^2)).  Before,
+        # cos(mu)**(N - 2) and cos(mu/2)**(N - 2) lost about N times the
+        # rounding error of the cosine, and 1 - cos(mu)**(N - 2) then lost
+        # the rest of the digits: at N = 1e9 and the optimal mu = 2.696e-6,
+        # Vmin came out as -2251.75 instead of 275.16.
+        s2 = s * s
+        A = -np.expm1((N - 2) * np.log1p(-2.0 * s2))
+        log_abs_c = 0.5 * np.log1p(-s2)            # |cos(mu/2)| >= sqrt(1/2) here
+        sgn = 1.0 if c > 0.0 else -1.0
+
+        def c_pow(k):
+            return (sgn ** (k % 2)) * np.exp(k * log_abs_c)
+    else:
+        # no cancellation for cos(mu) <= 0: the plain powers are accurate
+        A = 1.0 - np.cos(mu) ** (N - 2)
+
+        def c_pow(k):
+            return c ** k
+    B = 4.0 * s * c_pow(N - 2)
     rad = np.sqrt(A * A + B * B)
+    # A >= 0 always (|cos mu| <= 1), so A - rad = -B^2/(A + rad) has no
+    # cancellation; A = B = 0 only at mu = 0 (mod 2 pi)
+    A_minus_rad = -(B * B) / (A + rad) if A + rad > 0.0 else 0.0
     pref = N * (N - 1) / 16.0
-    Vmin = N / 4.0 + pref * (A - rad)
+    Vmin = N / 4.0 + pref * A_minus_rad
     Vmax = N / 4.0 + pref * (A + rad)
-    Jx = (N / 2.0) * c ** (N - 1)
+    Jx = (N / 2.0) * c_pow(N - 1)
     alpha_min = 0.5 * np.arctan2(-B, -A)
     xi2_S = Vmin / (N / 4.0)
     xi2_R = xi2_S * (N / 2.0) ** 2 / Jx ** 2 if Jx != 0.0 else np.inf

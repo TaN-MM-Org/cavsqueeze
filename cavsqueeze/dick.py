@@ -79,6 +79,22 @@ def _seg_sin(a, phi, w, t1, t2):
             - np.exp(-1j * phi) * _seg_E(-a - w, t1, t2)) / 2j
 
 
+def _seg_E_vec(k, t1, t2):
+    """`_seg_E` for an array of k, element by element the same arithmetic."""
+    k = np.asarray(k, dtype=float)
+    zero = np.abs(k) < 1e-300
+    kk = np.where(zero, 1.0, k)
+    out = (np.exp(1j * kk * t2) - np.exp(1j * kk * t1)) / (1j * kk)
+    out[zero] = complex(t2 - t1)
+    return out
+
+
+def _seg_sin_vec(a, phi, w, t1, t2):
+    """`_seg_sin` for an array of w."""
+    return (np.exp(1j * phi) * _seg_E_vec(a - w, t1, t2)
+            - np.exp(-1j * phi) * _seg_E_vec(-a - w, t1, t2)) / 2j
+
+
 def ramsey_sensitivity(t, T_ramsey: float, T_cycle: float,
                        tau_pulse: float = 0.0) -> np.ndarray:
     """The Ramsey sensitivity function g(t) over one cycle.
@@ -117,22 +133,24 @@ def dick_fourier_coefficients(m_max: int, T_ramsey: float, T_cycle: float,
     tp = float(tau_pulse)
     Tc = float(T_cycle)
     _check_timing(T, Tc, tp)
+    if not (np.isfinite(m_max) and float(m_max) == np.floor(m_max) and m_max >= 1):
+        # before 1.18 a fractional cutoff was truncated (2.7 -> 2 harmonics)
+        raise ValueError(f"m_max must be a whole number >= 1; got {m_max}")
     m_max = int(m_max)
-    if m_max < 1:
-        raise ValueError("m_max must be >= 1")
     a = np.pi / (2 * tp) if tp > 0 else 0.0
     # g0: mean of g -- pulses each contribute integral of the sin arc
     area = T + (2 * tp) * (2 / np.pi) if tp > 0 else T
     g0 = area / Tc
-    gm = np.empty(m_max, dtype=complex)
-    for m in range(1, m_max + 1):
-        w = 2 * np.pi * m / Tc
-        val = _seg_E(-w, tp, tp + T)                # free evolution
-        if tp > 0:
-            val += _seg_sin(a, 0.0, w, 0.0, tp)     # rise
-            # fall: sin(a (2 tp + T - t)) = sin(-a t + a (2 tp + T))
-            val += _seg_sin(-a, a * (2 * tp + T), w, tp + T, 2 * tp + T)
-        gm[m - 1] = val / Tc
+    # all harmonics at once (since 1.18; the same arithmetic as the
+    # former loop over m, element by element -- the tests check that the
+    # result is bit-identical to that loop)
+    w = 2 * np.pi * np.arange(1, m_max + 1) / Tc
+    val = _seg_E_vec(-w, tp, tp + T)                # free evolution
+    if tp > 0:
+        val += _seg_sin_vec(a, 0.0, w, 0.0, tp)     # rise
+        # fall: sin(a (2 tp + T - t)) = sin(-a t + a (2 tp + T))
+        val += _seg_sin_vec(-a, a * (2 * tp + T), w, tp + T, 2 * tp + T)
+    gm = val / Tc
     return g0, gm
 
 
@@ -155,6 +173,13 @@ def power_law_psd(h0: float = 0.0, h_m1: float = 0.0,
     return S_y
 
 
+def _tail_start(m_max: int) -> int:
+    """Index of the first harmonic in the cutoff check: the top 10 %, but
+    at least the top 100 harmonics (at most the top half)."""
+    m_max = int(m_max)
+    return min(int(0.9 * m_max), m_max - min(100, m_max // 2))
+
+
 def dick_allan_deviation(S_y: Callable, tau: float, T_ramsey: float,
                          T_cycle: float, tau_pulse: float = 0.0,
                          m_max: int = 20000, tail_tol: float = 1e-3) -> float:
@@ -168,7 +193,12 @@ def dick_allan_deviation(S_y: Callable, tau: float, T_ramsey: float,
     m_max : harmonic cutoff; the truncation is CHECKED, not hoped
         for: if the top 10 % of the harmonics (m > 0.9 m_max) still
         contribute more than `tail_tol` of the sum, the cutoff is
-        refused as too low.  The check bounds the omitted remainder
+        refused as too low.  Since 1.18 the checked window holds at least
+        the top 100 harmonics (the top half when m_max < 200): a window
+        of a few harmonics can fall on zeros of the coefficients (with
+        m_max = 10 and T_ramsey / T_cycle = 0.4 the only checked harmonic,
+        m = 10, is exactly zero), and 1.17 then accepted a result 2.1 %
+        short of the converged one.  The check bounds the omitted remainder
         only roughly: for terms falling as 1/m^2 (sharp pulse edges
         with white frequency noise, the slowest decay a
         `power_law_psd` spectrum gives) the harmonics beyond m_max
@@ -183,11 +213,19 @@ def dick_allan_deviation(S_y: Callable, tau: float, T_ramsey: float,
     """
     if not (np.isfinite(tau) and tau > 0):
         raise ValueError(f"tau must be finite and positive (s); got {tau}")
+    if not (np.isfinite(tail_tol) and tail_tol > 0):
+        # before 1.18 tail_tol = nan switched the cutoff check off silently
+        raise ValueError(f"tail_tol must be finite and positive; got {tail_tol}")
     g0, gm = dick_fourier_coefficients(m_max, T_ramsey, T_cycle,
                                        tau_pulse)
     Tc = float(T_cycle)
     m = np.arange(1, int(m_max) + 1)
     Sy_vals = np.asarray(S_y(m / Tc), dtype=float)
+    if not (np.all(np.isfinite(Sy_vals)) and np.all(Sy_vals >= 0.0)):
+        # before 1.18 a spectrum with nan or negative values (for example a
+        # measured PSD interpolated outside its range) gave a nan floor
+        raise ValueError("S_y must be finite and >= 0 at every harmonic "
+                         f"m / T_cycle, m = 1..{int(m_max)} (1/Hz)")
     terms = (np.abs(gm) ** 2 / g0 ** 2) * Sy_vals
     total = float(terms.sum())
     # the truncation check applies only when the coefficients exceed
@@ -195,11 +233,11 @@ def dick_allan_deviation(S_y: Callable, tau: float, T_ramsey: float,
     # exactly zero coefficients, stored as ~1e-17 roundoff)
     noise_floor = (1e-12) ** 2 * float(Sy_vals.sum())
     if total > noise_floor:
-        tail = float(terms[int(0.9 * m_max):].sum())
+        tail = float(terms[_tail_start(m_max):].sum())
         if tail > tail_tol * total:
             raise ValueError(
                 f"harmonic cutoff m_max = {m_max} is too low: the "
-                f"top 10 % of the harmonics still carry "
+                f"top harmonics (m > {_tail_start(m_max)}) still carry "
                 f"{tail / total:.2%} of the sum. Raise m_max")
     return float(np.sqrt(total / float(tau)))
 

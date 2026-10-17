@@ -424,6 +424,11 @@ def sample_variance_sigma(shots, kurtosis: float | None = None) -> float:
     m = x.size
     if m < 2 or not np.all(np.isfinite(x)):
         raise ValueError("need at least 2 finite shots")
+    if kurtosis is not None and not (np.isfinite(kurtosis) and kurtosis >= 1.0):
+        # every distribution has kurtosis >= 1 (equality for a symmetric
+        # two-point distribution); before 1.18 a smaller or nan value
+        # returned nan (or the error bar of an impossible distribution)
+        raise ValueError(f"kurtosis must be finite and >= 1; got {kurtosis}")
     s2 = float(np.var(x, ddof=1))
     return s2 * float(np.sqrt(_var_s2_factor(
         _sample_kurtosis(x) if kurtosis is None else float(kurtosis), m)))
