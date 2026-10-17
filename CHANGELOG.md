@@ -1,13 +1,152 @@
 # Changelog
 
-## Unreleased
+## 1.18.0 (2026-10-17)
 
-- Packaging: the license is now given as the SPDX expression
-  `license = "Apache-2.0"` with `license-files = ["LICENSE"]`, and the
-  old license table and license classifier are gone. Building no longer
-  prints setuptools' deprecation warnings (their support ends on
-  2027-02-18). Building from source now needs setuptools 77 or newer;
-  installing the package is unchanged.
+Second audit and lab-tools release: a Voigt line and a stretched echo
+from measured decays, two worked tutorials, fixes for wrong numbers that
+came without an error (the largest: `oat_closed_form` for many spins),
+and faster Dick-floor and single-class solver runs with bit-identical
+results.
+
+### Added
+
+- `fit_coherence_decay(..., line="voigt", T2=..., T2_sigma=...)`: the
+  Ramsey decay of a Voigt line,
+  `A exp(-(1/T2 + F_L/2) t - s^2 t^2/2)` (the Fourier transform of a
+  convolution is the product of the transforms). Returns the total FWHM
+  of the exact Voigt profile and `lorentz_fraction = F_L / FWHM`, the
+  inputs of `lineshape("voigt", fwhm, lorentz_fraction)`, plus
+  `fwhm_gaussian` and `fwhm_lorentzian`, with error bars by the delta
+  method (the error of the given `T2` included). New `DecayFit` fields
+  at the end with default `None`, so existing code is unaffected. It
+  refuses a fit without `T2` and a part of the line that is not
+  resolved, naming the simpler line to use. This lifts the README limit
+  "A Voigt line is not fitted".
+- `fit_stretched_decay` / `StretchedDecayFit`: an echo decay fitted with
+  `A exp(-(t/T_M)^x)`, the form used for rare-earth echoes (for example
+  M. Le Dantec et al., arXiv:2106.14974 (2021), citing T. Bottger et
+  al., Phys. Rev. B 73, 075101 (2006)), with error bars, the fit quality,
+  and a test of `x = 1` (the exponential decay of the model):
+  `chi2_exponential`, `delta_chi2` and `p_exponential` (chi-square with
+  one degree of freedom).
+- Type hints on the public functions touched in this release.
+
+### Fixed
+
+Each fix has a test in `tests/test_fixes_118.py` that fails on 1.17.0.
+
+- `oat_closed_form` lost its accuracy for many spins: `cos(mu)**(N-2)`
+  and `cos(mu/2)**(N-2)` carry about N times the rounding error of the
+  cosine, and `1 - cos(mu)**(N-2)` and `A - sqrt(A^2 + B^2)` then lose
+  the remaining digits. At the optimal angle
+  `mu = 24^(1/6) (N/2)^(-2/3)` the smallest variance was off by
+  -4.7e-7 (N = 10^6), -4.0e-4 (10^7) and +3.9e-2 (10^8) of its value
+  (at half that angle: -6.8e-6, -1.9e-4 and +1.8e-2), and for N = 10^9
+  at `mu = 2.696e-6` it was -2251.75 (true 275.16, `xi2_S` = -9.0e-6). The powers are now formed
+  from `log1p(-sin^2(mu/2))` and the difference as
+  `-B^2/(A + sqrt(A^2 + B^2))`: the smallest variance agrees with a
+  60-digit evaluation to 1e-9 up to N = 10^9 and with exact Dicke-basis
+  evolution at N = 10^6 to 1e-8. For N <= 1000 the values move by less
+  than 1.1e-11 of `N/4` (README example 4 is unchanged).
+- `evolve` with `t = 0` returned the starting state for every requested
+  output time, so `evolve(st, rt, 0.0, t_eval=[0.5])` reported it as the
+  state at 0.5 s; and `ramsey_cumulant` integrated to the last listed
+  time, so `ramsey_cumulant(p, ens, [1e-3, 0.0])` gave contrast 1.0 at
+  1 ms (true 0.904837 for `T2` = 10 ms). Output times outside `[0, t]`
+  are now refused, and `ramsey_cumulant` and `ramsey_meanfield` accept
+  times in any order and return them in the order given (results for
+  sorted times are unchanged, bit for bit).
+- `evolve_meanfield` with `t = 0`, and so `ramsey_meanfield(p, ens,
+  [0.0])`, raised `TypeError`; it now returns the starting state.
+- `save_shots_csv` dropped an angle without shots without a word (3
+  angles saved, 2 loaded back), and wrote one-shot angles, `nan` angles
+  and non-finite shots into files that `load_shots_csv` refused or that
+  the estimators refuse. Each is now refused when saving.
+- `sample_variance_sigma(shots, kurtosis=k)` returned `nan` for
+  `k < (M-3)/(M-1)` or `k = nan` (and the error bar of an impossible
+  distribution for `(M-3)/(M-1) <= k < 1`); every distribution has
+  kurtosis >= 1, so these are now refused.
+- `dick_allan_deviation` returned `nan` for a spectrum with `nan` or
+  negative values at the harmonics, ignored the cutoff check for
+  `tail_tol = nan`, and `dick_fourier_coefficients` truncated a
+  fractional `m_max` (2.7 -> 2 harmonics). Now `ValueError`.
+- The cutoff check of `dick_allan_deviation` looked at the top 10 % of
+  the harmonics, which for a small `m_max` can be a single harmonic on a
+  zero of the coefficients: with `m_max = 10`, `T_ramsey = 0.4`,
+  `T_cycle = 1` and `h0 = 1e-30` it checked only `m = 10` (exactly zero)
+  and returned 8.476e-16, 2.1 % below the converged 8.660e-16. The
+  window now holds at least the top 100 harmonics (the top half when
+  `m_max < 200`); for `m_max >= 1000`, the default 20000 included, it is
+  the same window as before.
+- `plan_tomography` and `shots_for_squeezing` raised NumPy's
+  `LinAlgError` for a non-finite `theta_min`, and
+  `tail_resolved_classes` raised `ZeroDivisionError` for `M_core = 0`;
+  both now raise `ValueError` naming the input (also for class counts
+  below 1 and edges that do not satisfy `0 < core_edge < delta_max`).
+
+### Changed
+
+- The `oat_closed_form` docstring said every line was asserted against
+  exact evolution; it now says which quantities are checked, and to
+  what tolerance.
+- `tests/test_decay.py::test_refusals` pinned `line="voigt"` as an
+  unknown line; it now expects the refusal without `T2`, and an unknown
+  name (`"cauchy"`) for the unknown-line case.
+- Packaging (was "Unreleased"): the license is given as the SPDX
+  expression `license = "Apache-2.0"` with `license-files =
+  ["LICENSE"]`, and the old license table and license classifier are
+  gone. Building no longer prints setuptools' deprecation warnings
+  (their support ends on 2027-02-18). Building from source now needs
+  setuptools 77 or newer; installing the package is unchanged.
+
+### Performance
+
+Measured on the shared 2-CPU build machine, medians of repeated runs,
+1.17.0 and 1.18.0 in the same session. Each new path is checked to be
+bit-identical to the 1.17.0 code, which `tests/test_speed_118.py` keeps
+as the reference.
+
+- `dick_fourier_coefficients` computes all harmonics at once instead of
+  looping over them: `dick_allan_deviation` with the default 20000
+  harmonics takes 2.5 ms instead of 63.5 ms (25x) without pulses and
+  25 ms instead of 368 ms (14.5x) with 10 ms pulses (medians of 9).
+- The solver's right-hand side computes the rate constants once per
+  `evolve` call and each repeated product once per step: a 1 ms run of
+  one class (README example 1's setting) takes 0.197 s instead of
+  0.337 s (1.7x, medians of 5); README example 1 as a whole took 19.4 s
+  instead of 26.9 s (1.4x, medians of 6 runs on a loaded machine). For
+  16 classes (example 2) the time is unchanged within the noise (0.58 s
+  and 0.64 s).
+- `optimal_squeezing` reuses the scan at the best time instead of
+  computing it again.
+
+### Tutorials
+
+- `examples/tutorial_decays_to_model.py`: echo and Ramsey decays to
+  `T2`, the stretch exponent and a Voigt line, then a squeezing
+  prediction with an error bar (about 5 s).
+- `examples/tutorial_tomography_to_clock.py`: fringe and tomography shot
+  files to `xi2_R` with its error bar and chi-square checks, then the
+  projected clock stability next to a Dick floor (about 1 s).
+- Both outputs are in the README ("Tutorials") and in each script's
+  docstring; `tests/test_tutorials.py` runs them and checks every
+  printed number.
+
+### Tests
+
+- 221 tests pass and 3 skip (1.17.0: 170 and 3; the 3 skipped need the
+  paper's companion scripts). New: `test_fixes_118.py` (each fix above;
+  the large-N variance against a 60-digit evaluation to 1e-9 and Dicke
+  evolution to 1e-8), `test_decay_118.py` (Voigt fit against the
+  closed form to 1e-9 and against numerical Fourier integration of the
+  profile to 1e-7; error bars within 0.8-1.2 of the scatter over 300
+  datasets; stretched fit against the closed form to 1e-9, its
+  exponential reference against SciPy's `curve_fit` to 1e-7, error bars
+  and the `x = 1` test by Monte Carlo), `test_protocols_118.py`
+  (`twist_untwist` and `plain_squeezed_readout`, untested before,
+  against the linearized one-axis-twisting shear to 2e-5),
+  `test_speed_118.py` (bit-identity with the 1.17.0 code) and
+  `test_tutorials.py`. The new tests take about 40 s together.
 
 ## 1.17.0 (2026-10-10)
 

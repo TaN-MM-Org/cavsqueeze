@@ -27,8 +27,9 @@ It answers these questions:
   before it is taken? And how large is the error bar when the
   detector's noise is not Gaussian?
 - What coherence time `T2` and line width do my own echo and Ramsey
-  measurements give, so that I can put them into the model? And do my
-  measured data actually follow the laws the fits assume?
+  measurements give, so that I can put them into the model? Is my echo
+  decay exponential, as the model assumes? And do my measured data
+  actually follow the laws the fits assume?
 - When does the noise of the clock laser (the Dick effect) make
   squeezing useless?
 
@@ -48,6 +49,7 @@ not.
 - [A short guide to the words used here](#a-short-guide-to-the-words-used-here)
 - [Install, requirements and units](#install-requirements-and-units)
 - [Examples](#examples) (each with the output it prints)
+- [Tutorials](#tutorials) (two scripts that go from data to a result)
 - [What is in the package](#what-is-in-the-package)
 - [When it refuses, and why](#when-it-refuses-and-why)
 - [How the results are checked](#how-the-results-are-checked)
@@ -156,7 +158,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.17.0. All device values are illustrative
+with cavsqueeze 1.18.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -598,6 +600,12 @@ any rate or width that is not at least two error bars above zero.
 The fitted values (in rad/s and s) go straight into `from_hz` and
 `lineshape`, as the last two lines show.
 
+Since 1.18 the fit also takes `line="voigt"` (a Gaussian and a
+Lorentzian part together, with `T2` from the echo), and
+`fit_stretched_decay` tests whether the echo decay is exponential. The
+tutorial `examples/tutorial_decays_to_model.py` uses both (see
+[Tutorials](#tutorials)).
+
 ### 11. Do the tomography data follow the rotation law?
 
 ```python
@@ -634,6 +642,46 @@ estimate looks normal, but `p` is tiny. The test assumes nearly
 Gaussian sample variances, which needs many shots per angle. In the
 tests, with 200 shots per angle, between 2 % and 9 % of 400 correct
 experiments give `p < 0.05` (5 % is expected).
+
+## Tutorials
+
+Two scripts in the `examples/` folder of the source repository go from
+data to a final result with error bars. Each uses only the package and
+seeded synthetic "measurements" drawn from known values, so the result
+can be compared with the truth. With your own data, replace the
+synthetic block with your measurements. Each runs in a few seconds, and
+a test checks that it still prints the numbers below.
+
+**From decays to a squeezing prediction**
+(`python examples/tutorial_decays_to_model.py`). An echo decay gives
+`T2`, and `fit_stretched_decay` checks that the echo is exponential
+(stretch exponent `x` = 1, as the model assumes). A Ramsey decay, fitted
+with the echo's `T2` and its error bar, gives a Voigt line: its total
+FWHM and Lorentzian fraction (truth: 150 Hz and 0.3, `T2` = 5 ms). The
+fitted values go into the model, which predicts the squeezing after a
+1 ms echo twist of 10^12 spins. The error bar of the prediction comes
+from changing each fitted input by its error bar.
+
+```
+echo:     T2 = 5.028 +/- 0.038 ms, exponent x = 1.002 +/- 0.016, p(x = 1) = 0.89
+Ramsey:   FWHM = 148.8 +/- 1.9 Hz, Lorentzian fraction = 0.315 +/- 0.026, p = 0.61
+model:    xi2_R after 1.0 ms = -4.55 +/- 0.06 dB (true line and T2: -4.56 dB)
+```
+
+**From shot records to a clock's stability**
+(`python examples/tutorial_tomography_to_clock.py`). A fringe file and a
+tomography file of a squeezed state of 1000 spins (truth: contrast
+0.9989, `xi2_R` = 0.2508, that is 6.01 dB) are loaded, fitted and
+checked with their chi-square tests. The squeezing then sets the
+projection noise of an illustrative clock (429 THz, 0.4 s Ramsey time in
+a 1 s cycle), shown next to the Dick floor of a laser with white
+frequency noise `h0 = 1e-35` (a placeholder).
+
+```
+contrast: 0.9988 +/- 0.0007 (fringe fit chi2 = 8.8 for 13 dof, p = 0.79)
+xi2_R:    0.2473 +/- 0.0096 = 6.07 +/- 0.17 dB (tomography chi2 = 3.5 for 9 dof, p = 0.94)
+clock:    projection 1.459e-17 +/- 2.8e-19 (no squeezing 2.933e-17), Dick 2.739e-18, total 1.484e-17 at 1 s
+```
 
 ## What is in the package
 
@@ -691,7 +739,7 @@ inputs, units and conventions.
   squeezing after one time, over a list of times, and at the best
   time.
 - `ramsey_cumulant`, `ramsey_meanfield` -- Ramsey decay of the
-  contrast.
+  contrast (since 1.18 the times can be given in any order).
 - `twist_untwist` -- the twist-untwist readout of Davis, Bentsen,
   Schleier-Smith, PRL 116, 053601 (2016), with detection noise.
 - `plain_squeezed_readout` -- the gain of an ordinary squeezed Ramsey
@@ -746,6 +794,12 @@ inputs, units and conventions.
 - `fit_coherence_decay` (returns `DecayFit`, new in 1.17): `T2` from
   an echo decay, and the FWHM of a Gaussian or Lorentzian line from a
   Ramsey decay, with error bars and a fit-quality test (example 10).
+  New in 1.18: `line="voigt"` fits a Voigt line and returns its total
+  FWHM and `lorentz_fraction`, the two numbers `lineshape("voigt", ...)`
+  takes (also `fwhm_gaussian` and `fwhm_lorentzian`).
+- `fit_stretched_decay` (returns `StretchedDecayFit`, new in 1.18):
+  fits an echo decay with `A exp(-(t/T_M)^x)` and tests `x = 1`, the
+  exponential decay of the model (`p_exponential`).
 
 **Bridge to QuTiP**
 
@@ -806,9 +860,9 @@ inputs, units and conventions.
 - `log_uniform_weights` gets fewer than 1 weight or an infinite range
   (new in 1.17);
 - the harmonic cutoff of `dick_allan_deviation` is too low: if the top
-  10 % of the harmonics still carry more than `tail_tol` (default
-  1e-3) of the sum, it asks for a larger `m_max` rather than returning
-  a truncated answer;
+  10 % of the harmonics (since 1.18, at least the top 100) still carry
+  more than `tail_tol` (default 1e-3) of the sum, it asks for a larger
+  `m_max` rather than returning a truncated answer;
 - `synchronized_comparison` gets a per-shot phase noise that is not
   finite and positive;
 - the mean spin is zero (there is then no direction to squeeze across),
@@ -844,6 +898,36 @@ inputs, units and conventions.
   parameters undetermined; or when a fitted rate or width is not at
   least `min_significance` (default 2) error bars above zero.
 
+New in 1.18:
+
+- the output times `t_eval` of `evolve` and `evolve_meanfield` lie
+  outside `[0, t]` (before, `evolve` with `t = 0` returned the starting
+  state for every requested time), or the times given to
+  `ramsey_cumulant` and `ramsey_meanfield` are negative or not finite;
+- `save_shots_csv` gets an angle with fewer than 2 shots, a non-finite
+  angle or non-finite shots (before, an angle without shots was left out
+  of the file without a word, and the others gave files that
+  `load_shots_csv` could not read);
+- `sample_variance_sigma` gets a kurtosis below 1 or not finite (no
+  distribution has a kurtosis below 1; before, the result was `nan`);
+- `dick_allan_deviation` gets a spectrum with `nan` or negative values
+  at the harmonics (before, the floor came back as `nan`), a `tail_tol`
+  that is not finite and positive, or `dick_fourier_coefficients` a
+  cutoff that is not a whole number (2.7 used to mean 2). The cutoff
+  check now looks at no fewer than the top 100 harmonics (the top half
+  when there are fewer than 200); before, a window of one harmonic could
+  fall on a zero of the coefficients and pass a result 2 % short;
+- `plan_tomography` and `shots_for_squeezing` get a `theta_min` that is
+  not finite (before, NumPy's `LinAlgError`), and
+  `cavsqueeze.ensemble.tail_resolved_classes` gets class counts below 1
+  or impossible edges (before, `ZeroDivisionError` for `M_core = 0`);
+- `fit_coherence_decay(line="voigt")` gets no `T2`, or one part of the
+  line (Lorentzian or Gaussian) is not at least `min_significance` error
+  bars above zero (the message names the simpler line to fit);
+- `fit_stretched_decay` gets fewer than 4 points or 3 distinct times,
+  times that do not sample the decay, or a `T_M` or exponent that is not
+  at least `min_significance` error bars above zero.
+
 Also: `evolve` raises `RuntimeError` if SciPy's integrator reports a
 failure, and a planned design with fewer than 3 distinct directions is
 reported by `plan_tomography` as `identifiable = False` (and refused
@@ -851,7 +935,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-170 tests run on every push to `main` and every pull request, on
+221 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -926,6 +1010,22 @@ few minutes; most of it is one test of the trajectory solver.
   the predicted best angle, to 1e-12; the smallest and largest
   variance over a 2001-point angle grid to 1e-4. `mu = 0` gives exactly
   `xi2_S = 1`.
+- For many spins (new in 1.18): at the optimal twisting angle the
+  smallest variance agrees with the same formulas evaluated with 60
+  decimal digits (Python's `decimal` module) to 1e-9 for N = 10^7, 10^8
+  and 10^9, and with exact evolution in the (N + 1)-dimensional Dicke
+  basis at N = 10^6 to 1e-8. For N up to 1000 the values differ from
+  those of 1.17 by less than 1e-11 of `N/4`.
+
+**Readout protocols** (new in 1.18)
+
+- Without decay, the twisting is a shear of the transverse noise by
+  `Q = chi N t`. For N = 10^6 and `Q` = 0.5 and 2, `twist_untwist`
+  gives the gain `1 + Q^2` (and `(1 + Q^2)/(1 + 4 sigma_det^2/N)` with
+  detection noise) and the amplification `sqrt(1 + Q^2)` to 2e-5, and
+  `plain_squeezed_readout` gives `1/xi2` with
+  `xi2 = 1 + Q^2/2 - Q sqrt(1 + Q^2/4)` to 2e-5. An ideal
+  `twist_imperfect` equals `twist` exactly.
 
 **Dick effect**
 
@@ -1027,6 +1127,31 @@ few minutes; most of it is one test of the trajectory solver.
   equals a finite-difference refit to 2 %.
 - A Gaussian-line Ramsey decay fitted without the line gives
   `p < 1e-6`.
+- Voigt line (new in 1.18): decays built from the product formula are
+  recovered to 1e-9 (FWHM, `lorentz_fraction` and both parts, for
+  fractions 0.1, 0.3 and 0.6), and decays computed by numerical Fourier
+  integration of the profile of `lineshape("voigt", ...)` give back its
+  FWHM and fraction to 1e-7. Over 300 seeded datasets, in which the
+  given `T2` is itself drawn with its error bar, the scatter of the FWHM
+  and of the fraction is between 0.8 and 1.2 times the reported error
+  bars (1.00 and 1.00 in the test run).
+- Stretched echo (new in 1.18): noise-free decays with `x` = 0.7, 1,
+  1.5 and 2.4 are recovered to 1e-9. The exponential reference
+  `chi2_exponential` equals a separate fit by SciPy's `curve_fit` to
+  1e-7. For exponential data (200 seeds) the scatter of `T_M` and `x` is
+  0.8 to 1.2 times the error bars, and 1 % to 10 % of the datasets give
+  `p_exponential < 0.05` (3.5 % in the test run; the p-values pass a
+  Kolmogorov-Smirnov test for uniformity). For `x` = 1.8 (100 seeds)
+  every dataset rejects `x = 1`.
+
+**Speed-ups** (new in 1.18)
+
+- The 1.17 code of each faster routine is kept in the test file
+  (`tests/test_speed_118.py`) as the reference, and the new results are
+  bit-identical to it: the Dick Fourier coefficients for nine cycle
+  layouts (20000 harmonics, including exact resonances), the solver's
+  right-hand side for 1, 3 and 16 classes, a whole solver run, and the
+  result of `optimal_squeezing`.
 
 **Line shapes and inputs**
 
@@ -1051,12 +1176,42 @@ few minutes; most of it is one test of the trajectory solver.
 
 Each input that 1.16 accepted with a wrong or `nan` answer and 1.17
 refuses has a test (`tests/test_fixes_117.py`) that fails on 1.16.0.
+Each bug fixed in 1.18 has a test (`tests/test_fixes_118.py`) that
+fails on 1.17.0. The tutorials are run by `tests/test_tutorials.py`,
+which checks every printed number to its last digit.
 The remaining tests check refusals, further identities of the same
 functions, properties of the paper's pendulum model (the locking
 condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.18.0 fixes wrong numbers that came without an error.**
+
+- `oat_closed_form` lost its accuracy for many spins. The formulas
+  raise cosines close to 1 to the power N, which multiplies their
+  rounding error by about N. At the optimal twisting angle the smallest
+  variance was off by -4.0e-4 of its value for N = 10^7 and by +3.9 %
+  for N = 10^8, and for N = 10^9 it came out negative (-2251.75; the
+  true value is 275.16). It is now computed in a form without that
+  loss (see How the results are checked).
+- `ramsey_cumulant` integrated up to the last time in the list, not the
+  largest. With the times `[1e-3, 0.0]` it returned the contrast 1.0 at
+  1 ms, where the true value is 0.9048. The root cause, now refused:
+  `evolve` with `t = 0` returned the starting state for any requested
+  output time. The Ramsey functions now accept the times in any order.
+- `ramsey_meanfield` and `evolve_meanfield` failed with a `TypeError`
+  for `t = 0`.
+- `save_shots_csv` left an angle without shots out of the file without
+  a word (3 angles saved, 2 loaded back).
+- `sample_variance_sigma` returned `nan` for a kurtosis below 1, and
+  `dick_allan_deviation` returned `nan` for a spectrum with `nan` or
+  negative values.
+- The harmonic-cutoff check of `dick_allan_deviation` could look at a
+  single harmonic: with `m_max = 10` and a Ramsey time of 0.4 of the
+  cycle that harmonic is exactly zero, and the result (8.476e-16 for
+  `h0 = 1e-30`) was 2.1 % below the converged 8.660e-16 without an
+  error. For `m_max` of 1000 or more the check is unchanged.
 
 **1.17.0 refuses inputs that gave wrong numbers without an error.**
 No result of a valid input changes. The inputs that are now refused:
@@ -1162,12 +1317,14 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
   spins of `tail_resolved_classes`; use a discretization without
   spectators with it.
 - `fit_coherence_decay` knows only the decays of this model: an
-  exponential echo decay and a Gaussian or Lorentzian line. Echo decays
-  in solids are often not exponential (spectral diffusion); a small
-  p-value says so, but the package has no model for it. A Voigt line
-  is not fitted. The fit's error bars are the standard linear
-  approximation, checked in the tests for decays sampled well past
-  their half point.
+  exponential echo decay and a Gaussian, Lorentzian or (since 1.18)
+  Voigt line. Echo decays in solids are often not exponential (spectral
+  diffusion). `fit_stretched_decay` (new in 1.18) measures the stretch
+  exponent and tests the exponential form, but the solver itself has
+  only exponential (Markovian) dephasing: when the test fails, `T2` is
+  not a parameter that describes the measured decay. The fits' error
+  bars are the standard linear approximation, checked in the tests for
+  decays sampled well past their half point.
 - The `chi2` tests of the tomography and fringe fits assume nearly
   Gaussian sample variances and means, which needs many shots per
   angle (the tests use 200 to 2000). With `shot_noise="empirical"` and
@@ -1210,7 +1367,10 @@ et al., Nature 409, 63 (2001); Itano et al., Phys. Rev. A 47, 3554
 (1993); Ludlow et al., Rev. Mod. Phys. 87, 637 (2015); G. J. Dick,
 Proc. PTTI 1987; G. Santarelli et al., IEEE Trans. Ultrason.
 Ferroelectr. Freq. Control 45, 887 (1998); A. Quessada et al., J. Opt.
-B 5, S150 (2003); Schulte et al., Nat. Commun. 11, 5955 (2020).
+B 5, S150 (2003); Schulte et al., Nat. Commun. 11, 5955 (2020). The
+stretched echo form `exp(-(2 tau/T_M)^x)` is the one used, for example,
+by M. Le Dantec et al., arXiv:2106.14974 (2021), who cite T. Bottger,
+C. W. Thiel, Y. Sun and R. L. Cone, Phys. Rev. B 73, 075101 (2006).
 
 ## Citing, support and license
 
