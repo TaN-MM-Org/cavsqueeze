@@ -164,7 +164,9 @@ def test_misfit_is_flagged():
 
 @pytest.mark.parametrize("kw, match", [
     (dict(line="lorentzian"), "cannot be separated"),
-    (dict(line="voigt"), "line must be"),
+    # 1.17 refused line="voigt" as unknown; since 1.18 it needs T2
+    (dict(line="voigt"), "cannot be separated"),
+    (dict(line="cauchy"), "line must be"),
     (dict(line="none", T2=T2), "do not pass T2"),
     (dict(T2_sigma=1e-4), "without T2"),
     (dict(line="gaussian", T2=-1.0), "T2 must be"),
