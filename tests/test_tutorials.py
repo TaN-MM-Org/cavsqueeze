@@ -1,5 +1,6 @@
 """1.18: each tutorial in examples/ runs, and prints the numbers quoted in
-its docstring (and in the README) to the printed precision."""
+its docstring (and in the README) to the printed precision.  1.19 adds
+tutorial_detection_noise.py."""
 import pathlib
 import re
 import subprocess
@@ -23,7 +24,8 @@ def _numbers(line):
 
 
 @pytest.mark.parametrize("name", ["tutorial_decays_to_model.py",
-                                  "tutorial_tomography_to_clock.py"])
+                                  "tutorial_tomography_to_clock.py",
+                                  "tutorial_detection_noise.py"])
 def test_tutorial_prints_its_quoted_numbers(name):
     path = EXAMPLES / name
     if not path.exists():           # installed from a wheel: nothing to check

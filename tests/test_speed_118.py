@@ -1,5 +1,15 @@
 """1.18 speed-ups: each new code path is checked against the 1.17.0 code,
-kept here verbatim as the reference.  The results must be bit-identical."""
+kept here verbatim as the reference.
+
+Until 1.18 these comparisons were exact.  Since 1.19 the floating-point
+ones use a stated tolerance: the vectorized Dick coefficients call NumPy's
+array functions where 1.17 called the scalar ones (whose last digits can
+differ on other CPUs), and the 1.19 right-hand side forms its sums in a
+different order (see tests/test_speed_119.py).  The tolerances are 1e-12 of
+the largest value for single evaluations and 1e-9 for a whole solver run
+(rounding differences that the adaptive integrator carries along over
+hundreds of steps).  optimal_squeezing compares one code path with itself,
+so it stays exact."""
 import numpy as np
 import pytest
 
@@ -41,11 +51,11 @@ def _dick_coefficients_117(m_max, T, Tc, tp):
     (0.4, 1.0, 0.0), (0.4, 1.0, 0.01), (0.1, 1.0, 0.0), (0.9, 1.0, 0.0),
     (0.3, 1.0, 0.025), (1.0, 1.0, 0.0), (0.5, 1.0, 0.125),   # exact resonances
     (0.98, 1.0, 0.01), (2e-3, 0.7, 1e-4)])
-def test_dick_coefficients_are_bit_identical_to_the_loop(T, Tc, tp):
+def test_dick_coefficients_agree_with_the_loop(T, Tc, tp):
     g0, gm = cs.dick_fourier_coefficients(20000, T, Tc, tp)
     g0_ref, gm_ref = _dick_coefficients_117(20000, T, Tc, tp)
-    assert g0 == g0_ref
-    assert np.array_equal(gm, gm_ref)
+    assert g0 == g0_ref                       # scalar arithmetic, unchanged
+    assert np.max(np.abs(gm - gm_ref)) <= 1e-12 * np.max(np.abs(gm_ref))
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +179,7 @@ def _rhs_117(t, y, rt, feedback=True):
 
 @pytest.mark.parametrize("M", [1, 3, 16])
 @pytest.mark.parametrize("feedback", [True, False])
-def test_rhs_is_bit_identical(M, feedback):
+def test_rhs_agrees_with_the_117_code(M, feedback):
     rng = np.random.default_rng(M)
     rt = C.Rates(delta=rng.normal(size=M), G=rng.uniform(0.5, 1.5, M),
                  n=rng.uniform(1.0, 100.0, M), chi1=0.3, Gd=0.2, Gu=0.05,
@@ -178,11 +188,12 @@ def test_rhs_is_bit_identical(M, feedback):
     for _ in range(5):
         y = rng.normal(size=2 * M + 4 * M * M) + 1j * rng.normal(size=2 * M + 4 * M * M)
         ref = _rhs_117(0.0, y, rt, feedback)
-        assert np.array_equal(C._rhs(0.0, y, rt, feedback), ref)
-        assert np.array_equal(C._rhs(0.0, y, rt, feedback, pre), ref)
+        scale = np.max(np.abs(ref))
+        assert np.max(np.abs(C._rhs(0.0, y, rt, feedback) - ref)) <= 1e-12 * scale
+        assert np.max(np.abs(C._rhs(0.0, y, rt, feedback, pre) - ref)) <= 1e-12 * scale
 
 
-def test_evolve_is_bit_identical_to_the_117_right_hand_side():
+def test_evolve_agrees_with_the_117_right_hand_side():
     """A whole solver run (echo twist of 1e10 spins in 16 classes) with the
     1.17.0 right-hand side passed to the same integrator."""
     from scipy.integrate import solve_ivp
@@ -194,7 +205,7 @@ def test_evolve_is_bit_identical_to_the_117_right_hand_side():
     new = C.evolve(st, rt, 2e-5)
     ref = solve_ivp(_rhs_117, (0.0, 2e-5), st.pack(), args=(rt, True), rtol=1e-8,
                     atol=1e-10 / N, method="DOP853")
-    assert np.array_equal(new.pack(), ref.y[:, -1])
+    assert np.max(np.abs(new.pack() - ref.y[:, -1])) <= 1e-9 * np.max(np.abs(ref.y[:, -1]))
 
 
 def test_optimal_squeezing_reuses_the_scan():
