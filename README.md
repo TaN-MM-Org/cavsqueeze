@@ -30,6 +30,9 @@ It answers these questions:
   measurements give, so that I can put them into the model? Is my echo
   decay exponential, as the model assumes? And do my measured data
   actually follow the laws the fits assume?
+- Does my detector see the projection noise of the spins, and how much
+  noise does it add? How large is the squeezing once that noise is
+  removed, with the error of the calibration included?
 - When does the noise of the clock laser (the Dick effect) make
   squeezing useless?
 
@@ -49,7 +52,7 @@ not.
 - [A short guide to the words used here](#a-short-guide-to-the-words-used-here)
 - [Install, requirements and units](#install-requirements-and-units)
 - [Examples](#examples) (each with the output it prints)
-- [Tutorials](#tutorials) (two scripts that go from data to a result)
+- [Tutorials](#tutorials) (three scripts that go from data to a result)
 - [What is in the package](#what-is-in-the-package)
 - [When it refuses, and why](#when-it-refuses-and-why)
 - [How the results are checked](#how-the-results-are-checked)
@@ -158,7 +161,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.18.0. All device values are illustrative
+with cavsqueeze 1.19.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -643,10 +646,73 @@ Gaussian sample variances, which needs many shots per angle. In the
 tests, with 200 shots per angle, between 2 % and 9 % of 400 correct
 experiments give `p < 0.05` (5 % is expected).
 
+### 12. Does the detector see projection noise?
+
+```python
+import numpy as np
+from cavsqueeze import calibrate_projection_noise
+
+# Synthetic, seeded calibration: coherent states of N spins (binomial shots)
+# read by a detector with noise variance 9, at eight atom numbers.  In the
+# second record every shot's pi/2 pulse also jitters by 0.02 rad (rms), which
+# moves all spins together and adds noise that grows like N^2.
+rng = np.random.default_rng(5)
+N = np.arange(500.0, 4001.0, 500.0)
+for jitter in (0.0, 0.02):
+    shots = []
+    for n in N:
+        tip = rng.normal(0, jitter, 2000)                # common tipping angle
+        up = rng.random((2000, int(n))) < (1 + np.sin(tip))[:, None] / 2
+        shots.append(up.sum(axis=1) - n / 2 + rng.normal(0, 3.0, 2000))
+    line = calibrate_projection_noise(N, shots)
+    quad = calibrate_projection_noise(N, shots, quadratic=True)
+    print(f"jitter {jitter} rad: line p = {line.p_value:.2g}, "
+          f"4 c1 = {line.projection_ratio:.3f}; parabola p = {quad.p_value:.2f}, "
+          f"4 c1 = {quad.projection_ratio:.2f} +/- {quad.projection_ratio_sigma:.2f}, "
+          f"c2 = {quad.technical_coefficient:.1e} +/- {quad.technical_coefficient_sigma:.1e}")
+```
+
+```
+jitter 0.0 rad: line p = 0.46, 4 c1 = 1.010; parabola p = 0.39, 4 c1 = 0.96 +/- 0.07, c2 = 3.3e-06 +/- 4.6e-06
+jitter 0.02 rad: line p = 1.7e-22, 4 c1 = 2.297; parabola p = 0.55, 4 c1 = 1.12 +/- 0.11, c2 = 9.0e-05 +/- 8.7e-06
+```
+
+Before a squeezing measurement, an experiment checks its readout on
+coherent spin states. For N independent spins, each up or down with
+probability 1/2, `J_z` is a binomial count minus N/2, so its variance is
+`N/4` (projection noise; W. M. Itano et al., Phys. Rev. A 47, 3554
+(1993)). A detector adds a constant variance `c0`. Noise that moves all
+spins together adds a term in `N^2`: if every spin is tipped by the same
+random angle, the variance is `(N/4) E[cos^2] + (N^2/4) Var(sin)` of that
+angle, exactly. `calibrate_projection_noise` (new in 1.19) fits
+`c0 + c1 N` (or, with `quadratic=True`, `c0 + c1 N + c2 N^2`) to the
+measured variances and reports `projection_ratio = 4 c1` (1 for pure
+projection noise) with its error bar and the p-value `p_projection` of
+`c1 = 1/4`, the detector variance `detection_variance = c0` with its
+error bar, and `chi2`, `dof`, `p_value` for the fit.
+
+Here the truth is `4 c1 = 1.000` and `c2 = 0` without jitter, and
+`4 c1 = 1.000` and `c2 = 1.0e-4` with it (from the formula above). Without
+jitter the straight line fits. With jitter the straight line is rejected
+(`p = 1.7e-22`) and its slope is wrong by more than a factor 2; the
+parabola fits, and its two numbers are within about one error bar of
+the truth. The fit weights each point by the error of its sample
+variance, read from the fitted curve and iterated, as in
+`estimate_squeezing`; `shot_noise="empirical"` uses each point's measured
+kurtosis instead of assuming Gaussian shots.
+
+The detector variance and its error bar go into the squeezing estimate:
+`estimate_squeezing(..., detection_variance=c0,
+detection_variance_sigma=...)` subtracts it and adds its error to that
+of `var_min`, `xi2_S` and `xi2_R` (new in 1.19). The tutorial
+`examples/tutorial_detection_noise.py` does both steps (see
+[Tutorials](#tutorials)).
+
 ## Tutorials
 
-Two scripts in the `examples/` folder of the source repository go from
-data to a final result with error bars. Each uses only the package and
+Three scripts in the `examples/` folder of the source repository (and,
+since 1.19, of the source distribution on PyPI) go from data to a final
+result with error bars. Each uses only the package and
 seeded synthetic "measurements" drawn from known values, so the result
 can be compared with the truth. With your own data, replace the
 synthetic block with your measurements. Each runs in a few seconds, and
@@ -681,6 +747,26 @@ frequency noise `h0 = 1e-35` (a placeholder).
 contrast: 0.9988 +/- 0.0007 (fringe fit chi2 = 8.8 for 13 dof, p = 0.79)
 xi2_R:    0.2473 +/- 0.0096 = 6.07 +/- 0.17 dB (tomography chi2 = 3.5 for 9 dof, p = 0.94)
 clock:    projection 1.459e-17 +/- 2.8e-19 (no squeezing 2.933e-17), Dick 2.739e-18, total 1.484e-17 at 1 s
+```
+
+**From a detector calibration to corrected squeezing** (new in 1.19;
+`python examples/tutorial_detection_noise.py`). Coherent states at six
+atom numbers (binomial shots) are read by a detector that adds noise of
+variance 25 (spin units squared). `calibrate_projection_noise` checks the
+projection noise (`4 c1` = 1) and measures the detector variance with its
+error bar. The tomography of a squeezed state of 1000 spins (truth:
+`xi2_R` = 0.2508), read by the same detector, is then fitted twice:
+without the correction the detector noise makes the state look less
+squeezed (0.343); with it the estimate agrees with the truth, and its
+error bar includes the error of the calibration. The last line plans the
+next run: the errors of the contrast and of the calibration set a floor
+under the error bar of `xi2_R` that more tomography shots cannot lower,
+and `shots_for_squeezing` gives the shots for a target above it.
+
+```
+calibration: detection variance 25.3 +/- 3.2, 4 c1 = 1.014 +/- 0.027 (p = 0.60), fit p = 0.89
+squeezing:   xi2_R = 0.3430 +/- 0.0088 raw, 0.2417 +/- 0.0154 = 6.17 +/- 0.28 dB corrected (true 0.2508)
+planning:    error-bar floor 0.0127 from contrast and calibration; +/- 0.015 needs 2396 shots per angle
 ```
 
 ## What is in the package
@@ -800,6 +886,16 @@ inputs, units and conventions.
 - `fit_stretched_decay` (returns `StretchedDecayFit`, new in 1.18):
   fits an echo decay with `A exp(-(t/T_M)^x)` and tests `x = 1`, the
   exponential decay of the model (`p_exponential`).
+- `calibrate_projection_noise` (returns `ProjectionNoiseFit`, new in
+  1.19): the readout noise of coherent spin states against the atom
+  number, `c0 + c1 N` (or `+ c2 N^2`), with the test of projection noise
+  `c1 = 1/4` and the detector variance `c0` with its error bar
+  (example 12).
+- `detection_variance_sigma` (new in 1.19) in `estimate_squeezing`,
+  `plan_tomography` and `shots_for_squeezing`: the error bar of the
+  subtracted detector variance, added to that of `var_min` in quadrature.
+  Subtracting a constant moves the fitted `var_min` by that constant and
+  leaves the fit weights unchanged, so this needs no approximation.
 
 **Bridge to QuTiP**
 
@@ -928,6 +1024,22 @@ New in 1.18:
   times that do not sample the decay, or a `T_M` or exponent that is not
   at least `min_significance` error bars above zero.
 
+New in 1.19:
+
+- `calibrate_projection_noise` gets inputs of different lengths, atom
+  numbers that are not finite and positive, fewer than 2 shots or
+  non-finite shots at an atom number, identical shots, fewer atom numbers
+  than fitted coefficients plus one, fewer distinct atom numbers than
+  coefficients, or data whose fitted variance curve reaches zero or below
+  at a measured atom number (it cannot then set the weights);
+- `detection_variance_sigma` is negative or not finite, or a target of
+  `shots_for_squeezing` lies below the floor set by the contrast error and
+  the detection-variance error together (the message names that floor);
+- `pulse` and `twist_imperfect` get a pulse duration that is negative or
+  not finite (before, a negative duration gave an instantaneous pulse
+  without a word), or `pulse` gets an `n_steps` that is not a whole
+  number of at least 1 (before, 0 ended in `ZeroDivisionError`).
+
 Also: `evolve` raises `RuntimeError` if SciPy's integrator reports a
 failure, and a planned design with fewer than 3 distinct directions is
 reported by `plan_tomography` as `identifiable = False` (and refused
@@ -935,7 +1047,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-221 tests run on every push to `main` and every pull request, on
+251 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -1144,14 +1256,55 @@ few minutes; most of it is one test of the trajectory solver.
   Kolmogorov-Smirnov test for uniformity). For `x` = 1.8 (100 seeds)
   every dataset rejects `x = 1`.
 
-**Speed-ups** (new in 1.18)
+**Projection-noise calibration** (new in 1.19)
 
-- The 1.17 code of each faster routine is kept in the test file
-  (`tests/test_speed_118.py`) as the reference, and the new results are
-  bit-identical to it: the Dick Fourier coefficients for nine cycle
-  layouts (20000 harmonics, including exact resonances), the solver's
-  right-hand side for 1, 3 and 16 classes, a whole solver run, and the
-  result of `optimal_squeezing`.
+- Variances that follow `c0 + c1 N (+ c2 N^2)` exactly give back the
+  coefficients to 1e-9, for atom numbers up to 10^6.
+- At the weights the fit converges to, the coefficients and their
+  covariance equal those of NumPy's `polyfit` (a separate implementation)
+  to 1e-9 of the error bars, and the weights equal the fitted curve times
+  `sqrt(2/(M-1))`.
+- Binomial shots (pure projection noise) plus detection noise of
+  variance 16, 200 seeded calibrations: no bias beyond 3 standard errors,
+  the scatter of `c0` and `c1` is 0.8 to 1.2 times the reported error
+  bars, and between 1 and 22 of the 200 tests of `c1 = 1/4` and of the
+  fit give `p < 0.05` (10 expected).
+- Shots tipped by a common random angle (0.02 rad rms): the parabola
+  gives back `c1 = (1 + e)/8` and `c2 = (1 - e)/8`, `e = exp(-2 s^2)`,
+  derived in the test, within 4 error bars, and the straight line is
+  rejected (`p < 1e-6`).
+- With 5 % of detector shots at 4 times the width, the Gaussian error bar
+  of `c0` is more than 1.3 times too small over 200 seeds, and the
+  empirical one is within 0.8 to 1.2 times the scatter.
+- The whole chain (calibration, then a tomography fit with
+  `detection_variance` and `detection_variance_sigma`), 200 seeds: the
+  scatter of `xi2_S` is 0.8 to 1.2 times the reported error bar, and
+  without `detection_variance_sigma` the error bar is more than 1.5 times
+  too small. On data, subtracting the detector variance moves `var_min` by
+  that constant (to rounding) and leaves its error bar and the fit
+  covariance unchanged, for both weightings and both `shot_noise` options;
+  the planned error bar equals the estimate's to 1e-9.
+
+**Speed-ups** (1.18 and 1.19)
+
+- The 1.17 code of each routine made faster in 1.18 is kept in
+  `tests/test_speed_118.py` as the reference: the Dick Fourier
+  coefficients for nine cycle layouts (20000 harmonics, including exact
+  resonances) agree to 1e-12 of the largest coefficient, the solver's
+  right-hand side for 1, 3 and 16 classes to 1e-12 of its largest entry,
+  and a whole solver run to 1e-9; `optimal_squeezing` gives exactly the
+  result of a separate `squeezing_after` call at its best time. (Until
+  1.19 these tests demanded bit-identical results. The vectorized Dick
+  coefficients call NumPy's array functions where the 1.17 code called
+  scalar ones, whose last digits can differ between processors, so the
+  tests now use these tolerances.)
+- The 1.18 right-hand side is kept in `tests/test_speed_119.py` as the
+  reference for the 1.19 one: for random states with 1, 3 and 16
+  classes, with and without the correlation feedback and with the
+  continuous measurement, they agree to 1e-12 of the largest entry (5e-16
+  measured), and whole runs of README examples 1 and 2 agree to 1e-9 of
+  the largest entry of the state (8e-14 measured) and to 1e-6 in `xi2`
+  (1e-9 measured).
 
 **Line shapes and inputs**
 
@@ -1177,14 +1330,35 @@ few minutes; most of it is one test of the trajectory solver.
 Each input that 1.16 accepted with a wrong or `nan` answer and 1.17
 refuses has a test (`tests/test_fixes_117.py`) that fails on 1.16.0.
 Each bug fixed in 1.18 has a test (`tests/test_fixes_118.py`) that
-fails on 1.17.0. The tutorials are run by `tests/test_tutorials.py`,
-which checks every printed number to its last digit.
+fails on 1.17.0, and each one fixed in 1.19 a test
+(`tests/test_fixes_119.py`) that fails on 1.18.0. The tutorials are
+run by `tests/test_tutorials.py`, which checks every printed number to
+its last digit.
 The remaining tests check refusals, further identities of the same
 functions, properties of the paper's pendulum model (the locking
 condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.19.0 fixes two input problems.**
+
+- The 1.18 notes said `ramsey_cumulant` and `ramsey_meanfield` take the
+  times in any order. A time that appeared twice, even in a sorted list
+  such as `[1e-3, 1e-3]`, ended in SciPy's error "Values in `t_eval` are
+  not properly sorted". `evolve` and `evolve_meanfield` now accept output
+  times in any order and with repeats, and return each in the order
+  given (for `T2` = 10 ms and no coupling, `[2e-3, 1e-3, 2e-3, 0.0]`
+  gives the contrasts 0.818731, 0.904837, 0.818731, 1). Results for
+  strictly increasing times are unchanged (the same solver call).
+- `pulse` with a negative duration returned the instantaneous pulse
+  without an error (the same state as `duration=0`); it is now refused,
+  as are a non-finite duration and an `n_steps` that is not a whole
+  number of at least 1 (0 used to end in `ZeroDivisionError`).
+
+A docstring that disagreed with the code was corrected:
+`CavityParams.chi` and `CavityParams.Gamma_SR` include `g^2` (they are
+per unit product of the coupling weights, not "per unit `g_j g_k`").
 
 **1.18.0 fixes wrong numbers that came without an error.**
 
@@ -1348,6 +1522,12 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 - The Voigt line's quantiles come from a tabulated cumulative
   distribution (checked to 1e-7 against numerical integration).
 - The bosonic export keeps second moments only.
+- `calibrate_projection_noise` treats the atom numbers as exact. An error
+  in N that is common to all points scales `c1` (and so
+  `projection_ratio`), and point-to-point errors in N are not included in
+  the error bars. Its p-values, like those of the tomography fit, assume
+  nearly Gaussian sample variances (the tests use 1500 or more shots per
+  point).
 
 ## Where it comes from
 

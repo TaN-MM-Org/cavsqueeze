@@ -1,5 +1,123 @@
 # Changelog
 
+## 1.19.0 (2026-10-18)
+
+Readout-calibration release: a projection-noise calibration of the
+detector, the error of the subtracted detector variance carried into the
+squeezing estimate and the shot planner, a faster cumulant solver, and
+fixes for repeated output times and invalid pulse inputs.
+
+### Added
+
+- `calibrate_projection_noise` / `ProjectionNoiseFit` (new module
+  `cavsqueeze.calibration`): fits the shot-to-shot variance of `J_z` for
+  coherent spin states at several atom numbers with `c0 + c1 N` (or
+  `c0 + c1 N + c2 N^2` with `quadratic=True`). It reports the detector
+  variance `c0`, `projection_ratio = 4 c1` (1 for the projection noise
+  `N/4` of independent spins; W. M. Itano et al., Phys. Rev. A 47, 3554
+  (1993)) and `p_projection`, the p-value of `c1 = 1/4`, all with error
+  bars, and `chi2`, `dof`, `p_value` for the fit. The weights come from
+  the fitted curve and are iterated, as in `estimate_squeezing`;
+  `shot_noise="empirical"` uses each point's measured kurtosis. Refuses
+  data it cannot fit reliably (too few or degenerate atom numbers, bad
+  shots, a fitted curve that reaches zero). README example 12.
+- `detection_variance_sigma` in `estimate_squeezing`, `plan_tomography`
+  and `shots_for_squeezing` (default 0, the 1.18 results): the error bar
+  of the subtracted detector variance. Subtracting a constant moves the
+  fitted `var_min` by that constant and leaves the weights unchanged, so
+  the error adds to that of `var_min` in quadrature without
+  approximation. `SqueezingEstimate.detection_variance_sigma` records it
+  (a new field with a default, at the end). `shots_for_squeezing` refuses
+  a target below the floor `xi2_R sqrt((2 sigma_C / C)^2 +
+  (sigma_det / var_min)^2)` and names it.
+- Type hints on the public functions touched in this release.
+
+### Fixed
+
+Each fix has a test in `tests/test_fixes_119.py` that fails on 1.18.0.
+
+- `ramsey_cumulant` and `ramsey_meanfield` were documented (1.18) to take
+  the times in any order, but a repeated time, even in a sorted list such
+  as `[1e-3, 1e-3]`, raised SciPy's `ValueError: Values in t_eval are not
+  properly sorted`; so did `evolve` and `evolve_meanfield` with repeated
+  or unsorted `t_eval`. They now compute the distinct times and return
+  each requested time in the order given: for `T2` = 10 ms without
+  coupling, `[2e-3, 1e-3, 2e-3, 0.0, 1e-3]` gives 0.818731, 0.904837,
+  0.818731, 1.000000, 0.904837 (`exp(-t/T2)` to 1e-7). Results for
+  strictly increasing times are unchanged (the same solver call).
+- `pulse(..., duration=-1e-3)` (and `twist_imperfect` with a negative
+  `pi_duration`) returned the instantaneous pulse without an error,
+  exactly the `duration=0` state; `n_steps=0` raised `ZeroDivisionError`
+  and `n_steps=2.5` a `TypeError`. Each is now a `ValueError` naming the
+  input, as is a non-finite duration.
+
+### Changed
+
+- Docstrings of `CavityParams.chi` and `CavityParams.Gamma_SR` said "per
+  unit g_j g_k", but the values include `g^2`: they are per unit product
+  of the coupling weights (the module docstring's rates times `g^2`).
+  Corrected; the values are unchanged.
+- `tests/test_speed_118.py` compared the faster 1.18 code paths with the
+  1.17 code bit for bit. The vectorized Dick coefficients call NumPy's
+  array functions where 1.17 called scalar ones, whose last digits can
+  differ between processors, and the 1.19 right-hand side forms its sums
+  in a different order. These comparisons now use stated tolerances:
+  1e-12 of the largest value for single evaluations and 1e-9 of the
+  largest entry for a whole solver run. The README no longer calls these
+  results bit-identical.
+- Packaging: a new `MANIFEST.in` puts `examples/`, `CHANGELOG.md` and
+  `CITATION.cff` into the source distribution, so that the tutorial tests
+  and the citation-version test run from an unpacked sdist (before, they
+  skipped there). The wheel is unchanged. No new build dependency.
+
+### Performance
+
+Measured on the shared 2-CPU build machine (heavily loaded by other jobs),
+medians of repeated runs, the 1.18 and 1.19 right-hand sides in the same
+session, interleaved.
+
+- The cumulant solver's right-hand side forms each sum over the other
+  classes once (the full sum minus the two excluded terms) and adds the
+  two complex-conjugate halves of the `Zc` sources as `2 Re(c X)`, about
+  half as many array operations. A 1 ms echo twist of one class (README
+  example 1's setting) takes 0.554 s instead of 0.853 s (1.54x, medians
+  of 7); a 20 us twist of 16 classes (example 2) 1.045 s instead of
+  1.572 s (1.50x, medians of 7); README example 1 as a whole
+  (`optimal_squeezing`) 21.7 s instead of 29.4 s (1.36x, medians of 3).
+  The 1.18 code is kept in `tests/test_speed_119.py`: the right-hand
+  sides agree to 1e-12 of the largest entry for random states (5e-16
+  measured), and whole runs to 1e-9 of the largest state entry (8e-14
+  measured) and 1e-6 in `xi2` (1e-9 measured). README examples 1 to 3
+  and 8 print the same numbers as before.
+
+### Tutorials
+
+- `examples/tutorial_detection_noise.py`: coherent-state shots at six
+  atom numbers calibrate the detector (projection noise checked, detector
+  variance with its error bar); the tomography of a squeezed state read by
+  the same detector is fitted without and with the correction (0.343 and
+  0.242 +/- 0.015, true 0.2508); the last line plans the next run against
+  the floor set by the contrast and calibration errors (about 2 s). The
+  output is in the README ("Tutorials") and in the script's docstring;
+  `tests/test_tutorials.py` runs it and checks every printed number.
+
+### Tests
+
+- 251 tests pass and 3 skip (1.18.0: 221 and 3; the 3 skipped need the
+  paper's companion scripts), on Python 3.13 and with the oldest allowed
+  dependencies (Python 3.10, NumPy 1.24.0, SciPy 1.10.0, Matplotlib
+  3.7.0, QuTiP 5.0.0). New: `test_calibration_119.py` (exact variances
+  recovered to 1e-9; coefficients and covariance against NumPy's
+  `polyfit` to 1e-9 of the error bars; binomial projection noise over 200
+  seeds, error bars within 0.8 to 1.2 of the scatter; the pulse-jitter law
+  derived in the test; empirical error bars with heavy-tailed detection
+  noise; the whole calibration-to-estimate chain over 200 seeds; the
+  planner against the estimate to 1e-9; refusals), `test_fixes_119.py`
+  (each fix above; the Ramsey contrast against `exp(-t/T2)` to 1e-7),
+  `test_speed_119.py` (the 1.18 right-hand side as the reference) and the
+  third tutorial in `test_tutorials.py`. The 30 new tests take about
+  22 s together on the (loaded) build machine.
+
 ## 1.18.0 (2026-10-17)
 
 Second audit and lab-tools release: a Voigt line and a stretched echo
