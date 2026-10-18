@@ -125,6 +125,9 @@ class SqueezingEstimate:
     chi2, dof, p_value : goodness of fit of the rotation law (new in
         1.17; see `estimate_squeezing`).  dof = n_angles - 3; with 3
         angles chi2 = 0 and p_value is nan.
+    detection_variance_sigma : the error bar of the subtracted detection
+        variance (new in 1.19), already included in var_min_sigma,
+        xi2_S_sigma and xi2_R_sigma.
     """
 
     xi2_S: float
@@ -152,6 +155,7 @@ class SqueezingEstimate:
     chi2: float = float("nan")
     dof: int = 0
     p_value: float = float("nan")
+    detection_variance_sigma: float = 0.0
 
 
 def variance_tomography(angles, variances, variance_sigmas,
@@ -476,7 +480,9 @@ def estimate_squeezing(angles, shots, N: int, contrast: float,
                        contrast_sigma: float = 0.0,
                        detection_variance: float = 0.0,
                        weighting: str = "model",
-                       shot_noise: str = "gaussian") -> SqueezingEstimate:
+                       shot_noise: str = "gaussian",
+                       detection_variance_sigma: float = 0.0
+                       ) -> SqueezingEstimate:
     """Estimate xi2_S and xi2_R from tomography shot records.
 
     Parameters
@@ -528,6 +534,16 @@ def estimate_squeezing(angles, shots, N: int, contrast: float,
         each angle's measured kurtosis, and propagates it through the
         fixed-weight fit exactly (see `variance_tomography`'s
         ``error_sigmas``).  The point estimate is the same either way.
+    detection_variance_sigma : the error bar of ``detection_variance``
+        (spin units squared; new in 1.19), for example from
+        `calibrate_projection_noise`.  Subtracting a constant from every
+        variance moves the fitted minimal variance by that constant and
+        leaves the weights unchanged (the weights come from the variance
+        curve before subtraction; an identity of the linear fit), so this
+        error adds to the error of var_min in quadrature, with no
+        linearization; it is assumed independent of the tomography shots
+        (a separate calibration).  The default 0
+        gives the results of 1.18.
 
     Returns a :class:`SqueezingEstimate`.  Its chi2, dof and p_value
     (new in 1.17) say whether the measured variances follow the
@@ -562,6 +578,10 @@ def estimate_squeezing(angles, shots, N: int, contrast: float,
     vdet = float(detection_variance)
     if vdet < 0.0 or not np.isfinite(vdet):
         raise ValueError("detection_variance must be finite and >= 0")
+    vdet_sigma = float(detection_variance_sigma)
+    if not (np.isfinite(vdet_sigma) and vdet_sigma >= 0.0):
+        raise ValueError("detection_variance_sigma must be finite and >= 0; got "
+                         f"{detection_variance_sigma}")
     if weighting not in ("model", "sample"):
         raise ValueError("weighting must be 'model' or 'sample'")
     if shot_noise not in ("gaussian", "empirical"):
@@ -610,6 +630,9 @@ def estimate_squeezing(angles, shots, N: int, contrast: float,
             f"fitted minimal variance {fit['var_min']:.3g} <= 0 after "
             f"subtracting detection variance {vdet:.3g}: {over}")
     vmin, svmin = fit["var_min"], fit["var_min_sigma"]
+    if vdet_sigma > 0.0:
+        # d var_min / d detection_variance = -1 exactly (see the docstring)
+        svmin = float(np.hypot(svmin, vdet_sigma))
     xi2_S = 4.0 * vmin / N
     xi2_S_sigma = 4.0 * svmin / N
     xi2_R = xi2_S / contrast**2
@@ -626,4 +649,5 @@ def estimate_squeezing(angles, shots, N: int, contrast: float,
         detection_variance=vdet, n_angles=int(th.size),
         shots_per_angle=M, weighting=used, shot_noise=shot_noise,
         n_reweight=int(n_refit), weighting_fallback=fallback,
-        chi2=fit["chi2"], dof=fit["dof"], p_value=fit["p_value"])
+        chi2=fit["chi2"], dof=fit["dof"], p_value=fit["p_value"],
+        detection_variance_sigma=vdet_sigma)

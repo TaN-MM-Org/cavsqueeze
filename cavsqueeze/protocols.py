@@ -50,8 +50,17 @@ def pulse(st: State, rt: Rates, axis, angle: float, duration: float = 0.0, angle
     (per-class angles if `angles` is given).  With a finite duration the
     cavity-mediated evolution continues during the pulse: the pulse is split
     into n_steps equal rotation increments interleaved with free evolution
-    (Strang splitting, error O(duration^2 / n_steps^2))."""
-    if duration <= 0:
+    (Strang splitting, error O(duration^2 / n_steps^2)).
+
+    Since 1.19 a negative or non-finite duration and an n_steps that is not
+    a whole number >= 1 are refused (before, a negative duration gave the
+    instantaneous pulse without a word, and n_steps = 0 a ZeroDivisionError)."""
+    if not (np.isfinite(duration) and duration >= 0):
+        raise ValueError(f"duration must be finite and >= 0 (s); got {duration}")
+    if not (isinstance(n_steps, (int, np.integer)) and not isinstance(n_steps, bool)
+            and n_steps >= 1):
+        raise ValueError(f"n_steps must be an integer >= 1; got {n_steps!r}")
+    if duration == 0:
         return rotate(st, axis, angle) if angles is None else rotate_classes(st, axis, angles)
     dt = duration / n_steps
     inc = angle / n_steps if angles is None else np.asarray(angles, float) / n_steps

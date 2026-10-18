@@ -72,12 +72,17 @@ class CavityParams:
 
     @property
     def chi(self) -> float:
-        """Dispersive exchange rate per unit g_j g_k (rad/s)."""
+        """Dispersive exchange rate 4 g^2 Delta / (4 Delta^2 + kappa^2) (rad/s),
+        per unit product w_j w_k of the coupling weights (the module
+        docstring's chi, which is per unit g_j g_k, times g^2; before 1.19
+        this docstring said "per unit g_j g_k")."""
         return 4.0 * self.g**2 * self.Delta / (4.0 * self.Delta**2 + self.kappa**2)
 
     @property
     def Gamma_SR(self) -> float:
-        """Collective decay rate per unit g_j g_k (rad/s)."""
+        """Collective decay rate 4 g^2 kappa / (4 Delta^2 + kappa^2) (rad/s),
+        per unit product w_j w_k of the coupling weights (the module
+        docstring's Gamma_SR times g^2)."""
         return 4.0 * self.g**2 * self.kappa / (4.0 * self.Delta**2 + self.kappa**2)
 
     @property

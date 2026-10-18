@@ -53,7 +53,8 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
                     var_max: float, theta_min: float = 0.0,
                     N: int | None = None, contrast: float = 1.0,
                     contrast_sigma: float = 0.0,
-                    detection_variance: float = 0.0) -> dict:
+                    detection_variance: float = 0.0,
+                    detection_variance_sigma: float = 0.0) -> dict:
     """Predicted error bars of a planned tomography measurement.
 
     angles : (K,) planned tomography angles (radians).
@@ -68,6 +69,9 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     detection_variance : known detection noise (spin units squared)
         you intend to subtract, which enters the weights exactly as it
         will in the estimate.
+    detection_variance_sigma : its error bar (new in 1.19), added to the
+        var_min error in quadrature exactly as `estimate_squeezing` adds
+        it.  Default 0 (the results of 1.18).
 
     Returns dict(identifiable, condition_number, var_min_sigma,
     cov_cab, and -- when N is given -- xi2_S, xi2_S_sigma, xi2_R,
@@ -82,6 +86,10 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     vdet = float(detection_variance)
     if vdet < 0.0 or not np.isfinite(vdet):
         raise ValueError("detection_variance must be finite and >= 0")
+    vdet_sigma = float(detection_variance_sigma)
+    if not (np.isfinite(vdet_sigma) and vdet_sigma >= 0.0):
+        raise ValueError("detection_variance_sigma must be finite and >= 0; got "
+                         f"{detection_variance_sigma}")
     if not np.isfinite(theta_min):
         # before 1.18 a nan or infinite theta_min ended in numpy's
         # LinAlgError ("SVD did not converge")
@@ -122,6 +130,8 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     g = np.array([1.0, -a / rr, -b / rr]) if rr > 0.0 \
         else np.array([1.0, 0.0, 0.0])
     var_min_sigma = float(np.sqrt(g @ cov @ g))
+    if vdet_sigma > 0.0:
+        var_min_sigma = float(np.hypot(var_min_sigma, vdet_sigma))
     out.update(var_min_sigma=var_min_sigma, cov_cab=cov)
     if N is not None:
         if not (isinstance(N, (int, np.integer)) and N >= 2):
@@ -143,7 +153,8 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
                         var_min: float, var_max: float, N: int,
                         contrast: float, contrast_sigma: float = 0.0,
                         theta_min: float = 0.0,
-                        detection_variance: float = 0.0
+                        detection_variance: float = 0.0,
+                        detection_variance_sigma: float = 0.0
                         ) -> tuple[int, dict]:
     """How many shots per angle does a target error bar cost?
 
@@ -155,7 +166,11 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
     The contrast term does not shrink with tomography shots: a target
     below the floor xi2_R * 2 sigma_C / C is refused by that exact
     argument, with the floor named, because more tomography cannot buy
-    it -- only a better fringe measurement can.
+    it -- only a better fringe measurement can.  With
+    ``detection_variance_sigma`` (new in 1.19) the floor is
+    xi2_R * sqrt((2 sigma_C / C)^2 + (sigma_det / var_min)^2), where
+    sigma_det is that error bar, and a target below it is refused in the
+    same way (only a better calibration of the detection noise helps).
 
     Returns (shots_per_angle, plan) where `plan` is the
     `plan_tomography` result at the returned shot number.
@@ -163,6 +178,11 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
     t = float(target_xi2_R_sigma)
     if not (np.isfinite(t) and t > 0.0):
         raise ValueError("target_xi2_R_sigma must be positive")
+    vdet_sigma = float(detection_variance_sigma)
+    if not (np.isfinite(vdet_sigma) and vdet_sigma >= 0.0):
+        raise ValueError("detection_variance_sigma must be finite and >= 0; got "
+                         f"{detection_variance_sigma}")
+    # the tomography part alone (without the detection-variance error)
     base = plan_tomography(angles, 2, var_min, var_max, theta_min, N,
                            contrast, contrast_sigma,
                            detection_variance)
@@ -172,6 +192,16 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
                          "the angles")
     xi2_R = base["xi2_R"]
     floor = xi2_R * 2.0 * contrast_sigma / contrast
+    if vdet_sigma > 0.0:
+        floor = xi2_R * float(np.hypot(2.0 * contrast_sigma / contrast,
+                                       vdet_sigma / var_min))
+        if t <= floor:
+            raise ValueError(
+                f"target {t:.3g} is below the floor {floor:.3g} = xi2_R * "
+                "sqrt((2 sigma_C / C)^2 + (sigma_det / var_min)^2) set by the "
+                "contrast error and the detection-variance error: no number "
+                "of tomography shots reaches it -- measure the contrast or "
+                "calibrate the detection noise more precisely instead")
     if t <= floor:
         raise ValueError(
             f"target {t:.3g} is below the contrast floor {floor:.3g} "
@@ -185,5 +215,5 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
     m = max(m, 2)
     plan = plan_tomography(angles, m, var_min, var_max, theta_min, N,
                            contrast, contrast_sigma,
-                           detection_variance)
+                           detection_variance, vdet_sigma)
     return m, plan

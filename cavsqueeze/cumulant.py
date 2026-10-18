@@ -241,8 +241,8 @@ def coherence(st: State, n, spec_n=None) -> float:
 def _rhs_constants(rt: Rates) -> dict:
     """The parts of `_rhs` that depend only on the rates.  Since 1.18
     `evolve` computes them once per call instead of at every step; each is
-    formed by exactly the operations `_rhs` used to apply, so the result is
-    bit-identical (asserted in tests/test_speed_118.py)."""
+    formed by the operations the 1.17 `_rhs` applied (tests/test_speed_118.py
+    compares with that code)."""
     G, n, delta = rt.G, rt.n, rt.delta
     chi1, Gd, Gu, gphi = rt.chi1, rt.Gd, rt.Gu, rt.gamma_phi
     c = 1j * chi1 + 0.5 * (Gd - Gu)
@@ -265,53 +265,66 @@ def _rhs_constants(rt: Rates) -> dict:
 
 
 def _rhs(t, y, rt: Rates, feedback: bool = True, pre: dict | None = None):
+    """Time derivative of the packed state (connected variables).
+
+    Since 1.19 the sums over the other classes p != m, n are formed once per
+    quantity, as the full sum minus the p = m and p = n terms ("brackets"
+    B below), and the two complex-conjugate halves of the Zc sources are
+    added as 2 Re(c X).  These are rearrangements of the 1.18 expressions
+    (kept in tests/test_speed_119.py, which checks agreement to 1e-12 of the
+    largest derivative); they take about half as many array operations."""
     M = rt.M
-    st = State.unpack(y, M)
-    s, z, Pc, Qc, Rc, Zc = st.s, st.z, st.Pc, st.Qc, st.Rc, st.Zc
-    G, n = rt.G, rt.n
+    s = y[:M]
+    z = y[M:2 * M]
+    b = y[2 * M:].reshape(4, M, M)
+    Pc, Qc, Rc, Zc = b[0], b[1], b[2], b[3]
+    G = rt.G
     Gd, Gu = rt.Gd, rt.Gu
     k = _rhs_constants(rt) if pre is None else pre
-    c, cc, Ac, W, Gm, Gn = k["c"], k["cc"], k["Ac"], k["W"], k["Gm"], k["Gn"]
+    c, cc, W, Gm, Gn = k["c"], k["cc"], k["W"], k["Gm"], k["Gn"]
     sc = np.conj(s)
     Rcc = np.conj(Rc)
+    RcT = Rc.T
 
-    # products used several times (each evaluated once since 1.18)
     Ws = W @ s
-    Wsc = np.conj(Ws)
     PcW, WPc = Pc @ W, W @ Pc
     QcW, WQc = Qc @ W, W @ Qc
-    RcW, RccW = Rc @ W, Rcc @ W
-    dP, dQ, dR, dRcc = np.diag(Pc), np.diag(Qc), np.diag(Rc), np.diag(Rcc)
+    RcW = Rc @ W
+    dP, dQ, dR = Pc.diagonal(), Qc.diagonal(), Rc.diagonal()
+    gs = G * s
+    u = Ws - gs                     # sum_{p != m} G_p n_p s_p, minus the self term
 
     # ---------------- first moments ----------------
     # sum_{k != a} G_k <sigma z_a sigma+_k> = sum_p G_p (n_p - d_pm)(Rc_mp + z_m s_p)
     fb = 1.0 if feedback else 0.0
-    S_zp = fb * (RcW - G * dR) + z * (Ws - G * s)
-    ds = -Ac * s + cc * G * S_zp
+    S_zp = fb * (RcW - G * dR) + z * u
+    ds = -k["Ac"] * s + cc * G * S_zp
     # sum_{k != a} G_k <sigma+_a sigma-_k> = sum_p G_p (n_p - d_pm)(Pc_mp + s_m s*_p)
-    S_pm = fb * (PcW - G * dP) + s * np.conj(Ws - G * s)
+    S_pm = fb * (PcW - G * dP) + s * np.conj(u)
     dz = -4.0 * G * np.real(c * S_pm) - k["G2"] * ((Gd - Gu) + (Gd + Gu) * z)
 
     # ---------------- helpers ----------------
     zm, zn = z[:, None], z[None, :]
     sm, sn = s[:, None], s[None, :]
     scm, scn = sc[:, None], sc[None, :]
-
-    def wsum(full, at_m, at_n):
-        """sum_p G_p (n_p - d_pm - d_pn) T(p) from the full sum and the p = m, p = n values."""
-        return full - Gm * at_m - Gn * at_n
+    # sum_p G_p (n_p - d_pm - d_pn) T(p): the full sum minus the p = m and
+    # p = n terms.  E is that sum for T(p) = s_p; the brackets are those for
+    # the correlations (the index p in the position named).
+    E = u[:, None] - gs[None, :]
+    Ec = np.conj(E)
+    B_Pp_n = WPc[None, :] - Gm * Pc - Gn * dP[None, :]       # T(p) = Pc_pn
+    B_Pm_p = PcW[:, None] - Gm * dP[:, None] - Gn * Pc       # T(p) = Pc_mp
+    B_Qp_n = WQc[None, :] - Gm * Qc - Gn * dQ[None, :]       # T(p) = Qc_pn
+    B_Qm_p = QcW[:, None] - Gm * dQ[:, None] - Gn * Qc       # T(p) = Qc_mp
+    B_Rm_p = RcW[:, None] - Gm * dR[:, None] - Gn * Rc       # T(p) = Rc_mp
 
     # ---------------- Pc ----------------
     # (iii) from d sigma+_a:  sum_p W_p [ z_m Pc_pn + s_p Rc*_mn ]
-    S1 = wsum(zm * WPc[None, :] + Rcc * Ws,
-              zm * Pc + Rcc * sm,           # p = m: z_m Pc_mn + s_m Rc*_mn
-              zm * dP[None, :] + Rcc * sn)  # p = n: z_m Pc_nn + s_n Rc*_mn
+    S1 = zm * B_Pp_n + Rcc * E
     # (iii) from d sigma-_b:  sum_p W_p [ z_n Pc_mp + s*_p Rc_nm ]
-    S2 = wsum(zn * PcW[:, None] + Rc.T * Wsc,
-              zn * dP[:, None] + Rc.T * scm,
-              zn * Pc + Rc.T * scn)
+    S2 = zn * B_Pm_p + RcT * Ec
     src_a = 0.5 * (zm + zm * zn + Zc) - Rc * scn - zm * (sn * scn)
-    src_b = 0.5 * (zn + zm * zn + Zc) - sm * np.conj(Rc.T) - zn * (sm * scm)
+    src_b = 0.5 * (zn + zm * zn + Zc) - sm * Rcc.T - zn * (sm * scm)
     dPc = (
         k["negAc_A"] * Pc
         + k["cc_Gm"] * (Gn * src_a + S1)
@@ -320,62 +333,61 @@ def _rhs(t, y, rt: Rates, feedback: bool = True, pre: dict | None = None):
     )
 
     # ---------------- Qc ----------------
-    S3 = wsum(zm * WQc[None, :] + Rc * Ws,
-              zm * Qc + Rc * sm,
-              zm * dQ[None, :] + Rc * sn)
-    S4 = wsum(zn * QcW[:, None] + Rc.T * Ws,
-              zn * dQ[:, None] + Rc.T * sm,
-              zn * Qc + Rc.T * sn)
+    S3 = zm * B_Qp_n + Rc * E
+    S4 = zn * B_Qm_p + RcT * E
     dQc = (
         k["negAc_Ac"] * Qc
         + k["cc_Gm"] * (k["neg_Gn"] * (Rc + zm * sn) * sn + S3)
-        + k["cc_Gn"] * (k["neg_Gm"] * sm * (Rc.T + zn * sm) + S4)
+        + k["cc_Gn"] * (k["neg_Gm"] * sm * (RcT + zn * sm) + S4)
     )
 
     # ---------------- Rc ----------------
     # (iii) from d sigma z_a: sum_p W_p [ c (s_m Pc_np + s*_p Qc_mn) + c* (s_p Pc_nm + s*_m Qc_pn) ]
-    S5 = wsum(c * (sm * PcW[None, :] + Qc * Wsc) + cc * (Pc.T * Ws + scm * WQc[None, :]),
-              c * (sm * Pc.T + Qc * scm) + cc * (Pc.T * sm + scm * Qc),
-              c * (sm * dP[None, :] + Qc * scn) + cc * (Pc.T * sn + scm * dQ[None, :]))
+    S5 = c * (sm * B_Pm_p.T + Qc * Ec) + cc * (Pc.T * E + scm * B_Qp_n)
     # (iii) from d sigma+_b: sum_p W_p [ z_n Rc_mp + s_p Zc_mn ]
-    S7 = wsum(zn * RcW[:, None] + Zc * Ws,
-              zn * dR[:, None] + Zc * sm,
-              zn * Rc + Zc * sn)
+    S7 = zn * B_Rm_p + Zc * E
     Pmn_raw = Pc + sm * scn
     Pnm_raw = Pc.T + sn * scm
-    src_za = c * (0.5 * (sm - Rc.T - sm * zn) - Pmn_raw * sn) + cc * (-Pnm_raw * sn)
+    RcT_szn = RcT + sm * zn
+    src_za = c * (0.5 * (sm - RcT - sm * zn) - Pmn_raw * sn) - cc * (Pnm_raw * sn)
     dRc = (
         k["decay_R"] * Rc
         - k["two_GG"] * src_za
         - k["two_Gm"] * S5
         - k["Ac"][None, :] * Rc
-        + k["cc_GG"] * (1.0 - zm) * (Rc.T + sm * zn)
+        + k["cc_GG"] * (1.0 - zm) * RcT_szn
         + k["cc_Gn"] * S7
-        - k["two_Gd_GG"] * (Rc.T + sm * zn)
+        - k["two_Gd_GG"] * RcT_szn
     )
 
     # ---------------- Zc ----------------
-    # (iii) from d sigma z_a: sum_p W_p [ c (s_m Rc*_np + s*_p Rc_nm) + c* (s_p Rc*_nm + s*_m Rc_np) ]
-    S8 = wsum(c * (sm * RccW[None, :] + Rc.T * Wsc) + cc * (Rcc.T * Ws + scm * RcW[None, :]),
-              c * (sm * Rcc.T + Rc.T * scm) + cc * (Rcc.T * sm + scm * Rc.T),
-              c * (sm * dRcc[None, :] + Rc.T * scn) + cc * (Rcc.T * sn + scm * dR[None, :]))
+    # (iii) from d sigma z_a: sum_p W_p [ c (s_m Rc*_np + s*_p Rc_nm) + c* (s_p Rc*_nm + s*_m Rc_np) ];
+    # the c* half is the complex conjugate of the c half, so the sum is 2 Re(c X)
+    S8 = 2.0 * np.real(c * (sm * np.conj(B_Rm_p.T) + RcT * Ec))
     # (iii) from d sigma z_b: sum_p W_p [ c (s_n Rc*_mp + s*_p Rc_mn) + c* (s_p Rc*_mn + s*_n Rc_mp) ]
-    S9 = wsum(c * (sn * RccW[:, None] + Rc * Wsc) + cc * (Rcc * Ws + scn * RcW[:, None]),
-              c * (sn * dRcc[:, None] + Rc * scm) + cc * (Rcc * sm + scn * dR[:, None]),
-              c * (sn * Rcc + Rc * scn) + cc * (Rcc * sn + scn * Rc))
-    src_zz_a = c * Pmn_raw * (1.0 - zn) - cc * Pnm_raw * (1.0 + zn)
-    src_zz_b = -c * Pnm_raw * (1.0 + zm) + cc * Pmn_raw * (1.0 - zm)
+    S9 = 2.0 * np.real(c * (sn * np.conj(B_Rm_p) + Rc * Ec))
+    src_zz = (c * Pmn_raw * (1.0 - zn) - cc * Pnm_raw * (1.0 + zn)
+              - c * Pnm_raw * (1.0 + zm) + cc * Pmn_raw * (1.0 - zm))
     dZc = (
         k["decay_Z"] * Zc
-        - k["two_GG"] * (src_zz_a + src_zz_b)
+        - k["two_GG"] * src_zz
         - k["two_Gm"] * S8
         - k["two_Gn"] * S9
         + k["four_GG"] * (Gd * Pmn_raw + Gu * Pnm_raw)
     )
 
     if getattr(rt, "meas", 0.0):
-        dPc, dQc, dRc, dZc = _add_measurement(rt.meas, getattr(rt, "meas_eta", 1.0), n, st, dPc, dQc, dRc, dZc)
-    return State(ds, dz, dPc, dQc, dRc, dZc).pack()
+        st = State.unpack(y, M)
+        dPc, dQc, dRc, dZc = _add_measurement(rt.meas, getattr(rt, "meas_eta", 1.0), rt.n, st, dPc, dQc, dRc, dZc)
+    out = np.empty(y.shape, dtype=complex)
+    out[:M] = ds
+    out[M:2 * M] = dz
+    ob = out[2 * M:].reshape(4, M, M)
+    ob[0] = dPc
+    ob[1] = dQc
+    ob[2] = dRc
+    ob[3] = dZc
+    return out
 
 
 def _add_measurement(Gm, eta, n, st, dPc, dQc, dRc, dZc):
@@ -428,12 +440,36 @@ def _check_t_eval(t_eval, t):
         raise ValueError(f"t_eval must be a non-empty set of finite times in [0, t] = [0, {t}]")
 
 
-def evolve(st: State, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=None, method="DOP853", feedback=True):
-    """Evolve for time t >= 0.  Returns the final State (or a list at t_eval)."""
+def _distinct_t_eval(t_eval):
+    """(sorted distinct times, index of each requested time among them), or
+    None when t_eval is already strictly increasing (then it is passed to
+    SciPy unchanged).  Since 1.19 output times may repeat or come in any
+    order; before, SciPy refused them ("Values in `t_eval` are not properly
+    sorted"), also for a sorted list with a repeated time such as
+    ramsey_cumulant(p, ens, [1e-3, 1e-3])."""
+    if t_eval is None:
+        return None
+    te = np.asarray(t_eval, dtype=float).ravel()
+    if np.all(np.diff(te) > 0):
+        return None
+    uniq, inverse = np.unique(te, return_inverse=True)
+    return uniq, inverse.ravel()
+
+
+def evolve(st: State, rt: Rates, t: float, t_eval=None, rtol: float = 1e-8, atol: float | None = None,
+           method: str = "DOP853", feedback: bool = True) -> State | list[State]:
+    """Evolve for time t >= 0.  Returns the final State, or a list of States
+    at the times t_eval (in [0, t]; since 1.19 in any order and possibly
+    repeated, each returned in the order given)."""
     if not (np.isfinite(t) and t >= 0):
         raise ValueError(f"evolution time must be finite and >= 0; got {t} (to reverse the "
                          "twisting, flip the cavity detuning instead, as twist_untwist does)")
     _check_t_eval(t_eval, t)
+    distinct = _distinct_t_eval(t_eval) if t > 0 else None
+    if distinct is not None:
+        states = evolve(st, rt, t, t_eval=distinct[0], rtol=rtol, atol=atol, method=method,
+                        feedback=feedback)
+        return [states[j].copy() for j in distinct[1]]
     if t == 0:
         return st.copy() if t_eval is None else [st.copy() for _ in t_eval]
     K = getattr(rt, "K", 0)
@@ -471,13 +507,19 @@ def evolve_meanfield(s, z, rt: Rates, t: float, t_eval=None, rtol=1e-8, atol=1e-
                      method="DOP853") -> tuple[np.ndarray, np.ndarray]:
     """Evolve the mean-field equations (averages only, no correlations) for
     time t >= 0, from the class averages s = <sigma+> and z = <sigma z>.
-    Returns (s, z) at t, or arrays of shape (M, len(t_eval)) at t_eval."""
+    Returns (s, z) at t, or arrays of shape (M, len(t_eval)) at t_eval (in
+    [0, t]; since 1.19 in any order and possibly repeated)."""
     if not (np.isfinite(t) and t >= 0):
         # before 1.17 a negative t silently integrated backwards, which for a
         # dissipative model returns an unphysical state (e.g. contrast e > 1
         # after t = -T2)
         raise ValueError(f"evolution time must be finite and >= 0; got {t}")
     _check_t_eval(t_eval, t)
+    distinct = _distinct_t_eval(t_eval) if t > 0 else None
+    if distinct is not None:
+        s_u, z_u = evolve_meanfield(s, z, rt, t, t_eval=distinct[0], rtol=rtol, atol=atol,
+                                    method=method)
+        return s_u[:, distinct[1]], z_u[:, distinct[1]]
     y0 = np.concatenate([np.asarray(s, complex), np.asarray(z, complex)])
     M = rt.M
     if t == 0:
