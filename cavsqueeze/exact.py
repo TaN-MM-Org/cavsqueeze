@@ -5,6 +5,10 @@ Two references are provided:
     couplings (N <= ~10).
   * `dicke_piqs`: N identical spins (homogeneous) using the permutation
     invariant (Dicke) solver PIQS (N up to a few hundred).
+
+Both use the package's dephasing convention L_j = sqrt(gamma_phi/2) sigma z_j
+(each spin's coherence decays as exp(-gamma_phi t)); since 1.20 the PIQS
+reference does too (before, it had half that dephasing).
 """
 from __future__ import annotations
 
@@ -95,9 +99,22 @@ def full_hilbert(rt_spins: Rates, bloch, times, extra_ops=None):
 def dicke_piqs(N, chi, Gd, Gu, gamma_phi, theta, times):
     """Homogeneous ensemble (all G = 1, delta = 0) solved in the Dicke basis with PIQS.
     H = chi J+ J- (J+ = sum sigma+), collective emission Gd, collective pumping Gu,
-    local dephasing gamma_phi.  Initial coherent spin state at polar angle theta from
-    the south pole (|down> = ground), azimuth 0 (points along +x for theta = pi/2).
-    Returns dict with <Jx>,<Jy>,<Jz> and the symmetrised covariance of (Jx,Jy,Jz)."""
+    local dephasing gamma_phi in the convention of the rest of the package,
+    L_j = sqrt(gamma_phi/2) sigma z_j, so that each spin's coherence decays as
+    exp(-gamma_phi t).  Initial coherent spin state at polar angle theta from +z
+    (the excited state |up>; <Jz> = (N/2) cos theta at t = 0), azimuth 0 (points
+    along +x for theta = pi/2).
+    Returns dict with <Jx>,<Jy>,<Jz> and the symmetrised covariance of (Jx,Jy,Jz).
+
+    Before 1.20 gamma_phi was passed to PIQS unchanged.  With PIQS's local
+    dephasing rate gamma_D each spin's coherence decays at gamma_D / 2, so the
+    reference had half the intended dephasing (for 4 spins with
+    gamma_phi = 0.7 and no other terms, <Jx> at t = 1 was 2 exp(-0.35) = 1.409
+    instead of 2 exp(-0.7) = 0.993).  It now passes 2 gamma_phi;
+    tests/test_fixes_120.py checks the result against the closed form and
+    against `full_hilbert` (which builds the Lindblad operators explicitly).
+    The docstring also said theta was measured from the south pole; the state
+    has always been the one described above."""
     from qutip import piqs
 
     ens = piqs.Dicke(N=N)
@@ -107,7 +124,7 @@ def dicke_piqs(N, chi, Gd, Gu, gamma_phi, theta, times):
     ens.hamiltonian = chi * jp * jm
     ens.collective_emission = Gd
     ens.collective_pumping = Gu
-    ens.dephasing = gamma_phi
+    ens.dephasing = 2.0 * gamma_phi
     L = ens.liouvillian()
     # coherent spin state: rotate |j, -j> by theta about y
     rho0 = piqs.css(N, x=theta, y=0.0, basis="dicke", coordinates="polar")

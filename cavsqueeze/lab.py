@@ -10,7 +10,10 @@ the closed-form weighted-least-squares covariance of the
 V(theta) = c + a cos(2 theta) + b sin(2 theta) fit, with the same
 per-angle sample-variance uncertainty s^2 sqrt(2/(M-1)) (the one
 place a Gaussian shot distribution is assumed, stated in
-`cavsqueeze.measured` and inherited here). Because the fit is linear,
+`cavsqueeze.measured` and inherited here; since 1.20 ``kurtosis``
+replaces it by the exact distribution-free form for shots of known
+kurtosis, the error bar `estimate_squeezing(shot_noise="empirical")`
+reports). Because the fit is linear,
 the planned covariance is not an approximation around a guess: it is
 the same matrix `variance_tomography` will report, computed from the
 design alone. The tests assert that equality to 1e-12. Since 1.16
@@ -35,7 +38,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .measured import _check_contrast
+from .measured import _check_contrast, _var_s2_factor
 
 __all__ = ["plan_tomography", "shots_for_squeezing"]
 
@@ -49,12 +52,27 @@ def _expected_profile(angles, var_min, var_max, theta_min):
     return c - r * np.cos(2.0 * (th - float(theta_min))), th
 
 
+def _check_kurtosis(kurtosis, shape):
+    """None, or the kurtosis of the shots at each angle broadcast to
+    ``shape``: finite and >= 1 (no distribution has a smaller one)."""
+    if kurtosis is None:
+        return None
+    k = np.asarray(kurtosis, dtype=float)
+    if k.ndim > 1 or (k.ndim == 1 and k.shape != shape):
+        raise ValueError("kurtosis must be a number or one value per angle; got shape "
+                         f"{k.shape} for {shape[0]} angles")
+    if not (np.all(np.isfinite(k)) and np.all(k >= 1.0)):
+        raise ValueError(f"kurtosis must be finite and >= 1 (3 for Gaussian shots); got {kurtosis}")
+    return np.broadcast_to(k, shape)
+
+
 def plan_tomography(angles, shots_per_angle, var_min: float,
                     var_max: float, theta_min: float = 0.0,
                     N: int | None = None, contrast: float = 1.0,
                     contrast_sigma: float = 0.0,
                     detection_variance: float = 0.0,
-                    detection_variance_sigma: float = 0.0) -> dict:
+                    detection_variance_sigma: float = 0.0,
+                    kurtosis=None) -> dict:
     """Predicted error bars of a planned tomography measurement.
 
     angles : (K,) planned tomography angles (radians).
@@ -72,6 +90,20 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     detection_variance_sigma : its error bar (new in 1.19), added to the
         var_min error in quadrature exactly as `estimate_squeezing` adds
         it.  Default 0 (the results of 1.18).
+    kurtosis : None (default: Gaussian shots, the results of 1.19), or the
+        kurtosis of the shots, the fourth central moment divided by the
+        squared variance (3 for Gaussian shots, 1.8 for uniform ones, 3 - 2/N
+        for the binomial projection noise of a coherent state of N spins,
+        larger with outliers); a number, or one value per angle (new in
+        1.20).  The fit weights stay those of `estimate_squeezing`, and each
+        sample variance's error becomes the exact
+        sigma^2 sqrt(kurtosis / M - (M - 3) / (M (M - 1))) (see
+        `sample_variance_sigma`), carried through the fixed-weight fit
+        exactly (`variance_tomography`'s ``error_sigmas``).  This is the
+        error bar `estimate_squeezing(..., shot_noise="empirical")` reports
+        when the measured kurtosis is the planned one.  It can come, for
+        example, from earlier shots: `scipy.stats.kurtosis(shots,
+        fisher=False)` is the same estimate `shot_noise="empirical"` uses.
 
     Returns dict(identifiable, condition_number, var_min_sigma,
     cov_cab, and -- when N is given -- xi2_S, xi2_S_sigma, xi2_R,
@@ -106,6 +138,7 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     M = np.broadcast_to(m_in.astype(int), th.shape).copy()
     if np.any(M < 2):
         raise ValueError("need at least 2 shots per angle")
+    kurt = _check_kurtosis(kurtosis, th.shape)
     s2_raw = v_true + vdet                 # what the shots will show
     sig = s2_raw * np.sqrt(2.0 / (M - 1))  # Gaussian sample variance
     X = np.column_stack([np.ones_like(th), np.cos(2 * th),
@@ -121,6 +154,14 @@ def plan_tomography(angles, shots_per_angle, var_min: float,
     if not identifiable:
         return out
     cov = np.linalg.inv(A)
+    if kurt is not None:
+        # the exact covariance of the fixed-weight fit when the errors of the
+        # sample variances are not the Gaussian ones used as weights (new in
+        # 1.20; the same sandwich as variance_tomography's error_sigmas)
+        err = s2_raw * np.sqrt(_var_s2_factor(kurt, M))
+        L = cov @ (X * (w * w)[:, None]).T
+        cov = (L * err ** 2) @ L.T
+        cov = 0.5 * (cov + cov.T)
     c = 0.5 * (var_min + var_max)
     r = 0.5 * (var_max - var_min)
     a = -r * np.cos(2.0 * float(theta_min))
@@ -154,14 +195,21 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
                         contrast: float, contrast_sigma: float = 0.0,
                         theta_min: float = 0.0,
                         detection_variance: float = 0.0,
-                        detection_variance_sigma: float = 0.0
-                        ) -> tuple[int, dict]:
+                        detection_variance_sigma: float = 0.0,
+                        kurtosis=None) -> tuple[int, dict]:
     """How many shots per angle does a target error bar cost?
 
     Exact inversion of the planned covariance: every per-angle weight
     scales as sqrt(M - 1), so the tomography part of the Wineland
     error bar scales as 1/sqrt(M - 1) exactly, and the smallest
     integer M meeting the target follows in closed form -- no search.
+
+    With ``kurtosis`` (new in 1.20; see `plan_tomography`) the error of
+    each sample variance scales as sqrt(kurtosis / M - (M - 3) / (M (M - 1)))
+    instead, which falls strictly with M for every kurtosis >= 1, so the
+    planned error bar does too; the smallest M is then found by an exact
+    integer search (doubling, then bisection) on `plan_tomography` itself.
+    The default None gives the closed-form result of 1.19.
 
     The contrast term does not shrink with tomography shots: a target
     below the floor xi2_R * 2 sigma_C / C is refused by that exact
@@ -208,6 +256,26 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
             "= xi2_R * 2 sigma_C / C: no number of tomography shots "
             "reaches it -- improve the fringe (contrast) measurement "
             "instead")
+    if kurtosis is not None:
+        _check_kurtosis(kurtosis, np.shape(np.asarray(angles, dtype=float).ravel()))
+
+        def plan_at(m):
+            return plan_tomography(angles, m, var_min, var_max, theta_min, N,
+                                   contrast, contrast_sigma, detection_variance,
+                                   vdet_sigma, kurtosis)
+
+        lo, hi = 1, 2                  # plan_at(lo) misses (or lo = 1), plan_at(hi) is tested
+        while plan_at(hi)["xi2_R_sigma"] > t:
+            lo, hi = hi, 2 * hi
+            if hi > 2 ** 52:           # beyond this, shot counts are not exact floats
+                raise ValueError(f"target {t:.3g} needs more than 2^52 shots per angle")
+        while hi - lo > 1:             # smallest hi that meets the target
+            mid = (lo + hi) // 2
+            if plan_at(mid)["xi2_R_sigma"] > t:
+                lo = mid
+            else:
+                hi = mid
+        return hi, plan_at(hi)
     # tomography term at M shots: tom(M) = tom(M=2) / sqrt(M - 1)
     tom_at_2 = xi2_R * (base["var_min_sigma"] / var_min)
     need = np.sqrt(max(t ** 2 - floor ** 2, 0.0))

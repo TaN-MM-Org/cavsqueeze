@@ -440,6 +440,31 @@ def _check_t_eval(t_eval, t):
         raise ValueError(f"t_eval must be a non-empty set of finite times in [0, t] = [0, {t}]")
 
 
+def _check_measurement(rt) -> None:
+    """The continuous-measurement settings must describe a physical
+    measurement (since 1.20; before, none was checked): a rate meas that is
+    finite and >= 0, and, when it is on, an efficiency 0 < meas_eta <= 1 and
+    no spectator spins.  An efficiency above 1 gives less back-action than
+    the measurement requires, and the state then breaks the uncertainty
+    relation (with meas_eta = 1.5 the product Var(J_y) Var(J_z) ended at 0.83
+    of its smallest allowed value <J_x>^2 / 4); a negative rate inflates
+    Var(J_z) instead of reducing it; nan stalled the integrator.  Spectators
+    are not conditioned (`_add_measurement`), although the measured J_z
+    includes them, so their variance would be wrong."""
+    meas = getattr(rt, "meas", 0.0)
+    if not (np.isfinite(meas) and meas >= 0.0):
+        raise ValueError(f"Rates.meas (measurement rate) must be finite and >= 0; got {meas}")
+    if meas == 0.0:
+        return
+    eta = getattr(rt, "meas_eta", 1.0)
+    if not (np.isfinite(eta) and 0.0 < eta <= 1.0):
+        raise ValueError(f"Rates.meas_eta (detection efficiency) must lie in (0, 1]; got {eta}")
+    if getattr(rt, "K", 0):
+        raise ValueError("the continuous measurement does not condition spectator spins, "
+                         "but the measured J_z includes them: use a discretization without "
+                         "spectators (spectator_beyond=None) with Rates.meas")
+
+
 def _distinct_t_eval(t_eval):
     """(sorted distinct times, index of each requested time among them), or
     None when t_eval is already strictly increasing (then it is passed to
@@ -465,6 +490,7 @@ def evolve(st: State, rt: Rates, t: float, t_eval=None, rtol: float = 1e-8, atol
         raise ValueError(f"evolution time must be finite and >= 0; got {t} (to reverse the "
                          "twisting, flip the cavity detuning instead, as twist_untwist does)")
     _check_t_eval(t_eval, t)
+    _check_measurement(rt)
     distinct = _distinct_t_eval(t_eval) if t > 0 else None
     if distinct is not None:
         states = evolve(st, rt, t, t_eval=distinct[0], rtol=rtol, atol=atol, method=method,

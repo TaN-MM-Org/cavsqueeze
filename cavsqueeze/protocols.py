@@ -191,7 +191,13 @@ def twist_untwist(params: CavityParams, ens: Ensemble, t: float, phi: float = 1e
     Returns the metrological gain relative to the standard quantum limit,
         G = (d<J_y>/d phi)^2 / [ N ( Var(J_y) + sigma_det^2 ) ],
     for each detection noise sigma_det (in units of spins), together with the
-    amplification factor d<J_y>/dphi / (N/2)."""
+    amplification factor d<J_y>/dphi / (N/2).
+
+    The slope is a central difference with steps +/- phi (rad), so phi must
+    be finite and nonzero (since 1.20; before, phi = 0 returned a gain of nan
+    without an error), and small enough for the response to be linear."""
+    if not (np.isfinite(phi) and phi != 0.0):
+        raise ValueError(f"phi must be finite and nonzero (rad); got {phi}")
     rt = Rates.from_params(params, ens)
     rt_neg = Rates.from_params(params.with_flipped_detuning(), ens)
     n = rt.n

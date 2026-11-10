@@ -28,6 +28,20 @@ the wing floor of the article comes from, since the floor contains no cavity
 parameter.  Collective emission, which sets the other limit, is checked against
 the exact Dicke-basis solution instead.
 
+Since 1.20 it also covers single-spin pure dephasing, L_j = sqrt(gamma_phi/2)
+sigma z_j (the convention of the rest of the package; each spin's coherence
+decays as exp(-gamma_phi t)).  That dissipator is exactly the average over a
+random rotation of each spin about z: with H_j = (xi_j(t)/2) sigma z_j and
+independent white noises of strength <xi_j(t) xi_j(t')> = 2 gamma_phi
+delta(t - t'), the averaged evolution is (gamma_phi/2) (sigma z_j rho sigma z_j
+- rho), the same master equation.  Each trajectory therefore turns each spin by
+an independent Gaussian angle of variance gamma_phi dt in each half step, and
+the interaction step sits between the two halves (Strang splitting).  Without
+interaction the rotations commute with the detunings and the result is exact
+in distribution; the tests compare it with that closed form, with the exact
+master equation for 4 spins and with the PIQS solution for 40 spins.
+Collective emission and thermal photons are still not covered.
+
 Reference for the method: J. Schachenmayer, A. Pikovski and A. M. Rey,
 Phys. Rev. X 5, 011022 (2015).
 """
@@ -67,12 +81,22 @@ def _rhs(t, y, delta, G, chi1, n_traj, n_spins):
     return np.concatenate([ds.ravel().view(np.float64), dz.ravel()])
 
 
-def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_steps=400):
+def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_steps=400,
+           gamma_phi=0.0):
     """Propagate `n_traj` samples of the coherent spin state along +x.
 
     `delta` and `G` are per-spin arrays in rad/s and dimensionless weights;
     `chi1` is the single-pair interaction, so that chi N is chi1 times the sum
     of G^2.  Returns the collective moments at each time in `t_eval`.
+
+    `gamma_phi` (rad/s, new in 1.20) is the single-spin pure dephasing rate
+    of `CavityParams.gamma_phi` (1/T2): each spin is turned about z by an
+    independent random angle of variance gamma_phi dt before and after each
+    step (see the module docstring).  The default 0 draws no extra random
+    numbers, so seeded runs give exactly the results of earlier versions.
+    The random rotations are drawn from the same generator after the
+    initial samples, so with gamma_phi > 0 the initial samples are the same
+    as with gamma_phi = 0.
 
     Fixed-step fourth-order Runge-Kutta.  The step is set by the fastest phase
     in the problem, max(|delta|, chi N), which is what an adaptive integrator
@@ -97,6 +121,9 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     if t_eval.ndim != 1 or t_eval.size == 0 or not np.all(np.isfinite(t_eval)) \
             or np.any(t_eval < 0):
         raise ValueError("t_eval must be a non-empty 1-D array of finite times >= 0")
+    gamma_phi = float(gamma_phi)
+    if not (np.isfinite(gamma_phi) and gamma_phi >= 0.0):
+        raise ValueError(f"gamma_phi must be finite and >= 0 (rad/s); got {gamma_phi}")
     T = float(np.max(t_eval))
     fastest = max(float(np.max(np.abs(delta))), abs(chiN), 1.0)
     n_nominal = int(max(min_steps, np.ceil(steps_per_rad * fastest * T / (2 * np.pi))))
@@ -128,13 +155,19 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
         if span > 0:
             n_seg = max(1, int(np.ceil(span / h_max * (1.0 - 1e-12))))
             dt = span / n_seg
+            # dephasing: a random turn about z of variance gamma_phi dt per half step
+            half_turn = np.sqrt(gamma_phi * dt)
             for _ in range(n_seg):
+                if gamma_phi > 0.0:
+                    s = s * np.exp(1j * half_turn * rng.standard_normal(s.shape))
                 k1s, k1z = deriv(s, z)
                 k2s, k2z = deriv(s + 0.5 * dt * k1s, z + 0.5 * dt * k1z)
                 k3s, k3z = deriv(s + 0.5 * dt * k2s, z + 0.5 * dt * k2z)
                 k4s, k4z = deriv(s + dt * k3s, z + dt * k3z)
                 s = s + (dt / 6.0) * (k1s + 2 * k2s + 2 * k3s + k4s)
                 z = z + (dt / 6.0) * (k1z + 2 * k2z + 2 * k3z + k4z)
+                if gamma_phi > 0.0:
+                    s = s * np.exp(1j * half_turn * rng.standard_normal(s.shape))
             n_total += n_seg
             t_now = float(t_next)
         out[float(t_next)] = _moments(2 * np.real(s), 2 * np.imag(s), z)
