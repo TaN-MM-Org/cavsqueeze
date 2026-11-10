@@ -24,8 +24,8 @@ It answers these questions:
 - Given shot-by-shot data from an experiment, how much squeezing was
   actually there, and with what error bar?
 - How many shots does a measurement need to reach a target error bar,
-  before it is taken? And how large is the error bar when the
-  detector's noise is not Gaussian?
+  before it is taken, also when the shots are not Gaussian? And how
+  large is the error bar when the detector's noise is not Gaussian?
 - What coherence time `T2` and line width do my own echo and Ramsey
   measurements give, so that I can put them into the model? Is my echo
   decay exponential, as the model assumes? And do my measured data
@@ -161,7 +161,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.19.0. All device values are illustrative
+with cavsqueeze 1.20.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -708,6 +708,54 @@ of `var_min`, `xi2_S` and `xi2_R` (new in 1.19). The tutorial
 `examples/tutorial_detection_noise.py` does both steps (see
 [Tutorials](#tutorials)).
 
+### 13. Planning when the shots are not Gaussian
+
+```python
+import numpy as np
+from scipy import stats
+from cavsqueeze import plan_tomography, shots_for_squeezing
+
+# The plan of example 6, but a short pilot run with the same detector shows
+# outliers: its shots (synthetic and seeded here; 5 % of them three times
+# wider than the rest) have a kurtosis well above the Gaussian value 3.
+rng = np.random.default_rng(7)
+pilot = rng.normal(0, 1, 4000)
+pilot = np.where(rng.random(4000) < 0.05, 3 * pilot, pilot)
+k = stats.kurtosis(pilot, fisher=False)        # fourth moment / variance^2
+print(f"kurtosis of the pilot shots: {k:.2f}")
+
+angles = np.linspace(0.0, np.pi, 9, endpoint=False)
+for label, kurt in [("Gaussian shots", None), ("measured kurtosis", k)]:
+    plan = plan_tomography(angles, 5000, var_min=90.0, var_max=160.0, N=480,
+                           contrast=0.92, contrast_sigma=0.01, kurtosis=kurt)
+    m, _ = shots_for_squeezing(0.02, angles, 90.0, 160.0, N=480, contrast=0.92,
+                               contrast_sigma=0.01, kurtosis=kurt)
+    print(f"{label:17s}: 5000 shots per angle give +/- {plan['xi2_R_sigma']:.4f}; "
+          f"+/- 0.02 needs {m} shots per angle")
+```
+
+```
+kurtosis of the pilot shots: 7.47
+Gaussian shots   : 5000 shots per angle give +/- 0.0223; +/- 0.02 needs 22116 shots per angle
+measured kurtosis: 5000 shots per angle give +/- 0.0280; +/- 0.02 needs 71506 shots per angle
+```
+
+Example 9 showed that outliers make the measured variances scatter
+more than Gaussian shots would. The planners (new in 1.20) take that
+into account before the measurement: with `kurtosis` (one number, or
+one per angle), each sample variance gets the exact error
+`sigma^2 sqrt(kurtosis/M - (M-3)/(M(M-1)))` instead of the Gaussian
+`sigma^2 sqrt(2/(M-1))`. The fit itself is the one `estimate_squeezing`
+does, so the planned error bar is the one that
+`estimate_squeezing(..., shot_noise="empirical")` will report when the
+measured kurtosis is the planned one. Here the
+outliers raise the cost of a +/- 0.02 error bar about 3.2 times, close
+to `(kurtosis - 1)/2` for many shots. A kurtosis below 3 (shots with
+short tails, such as the binomial projection noise of a few spins,
+`3 - 2/N`) lowers it. The kurtosis has to be measured on shots like
+the planned ones, for example in a pilot run; with `kurtosis=None` (the
+default) the planners give the Gaussian results of earlier versions.
+
 ## Tutorials
 
 Three scripts in the `examples/` folder of the source repository (and,
@@ -876,7 +924,8 @@ inputs, units and conventions.
   the rotation law or the fringe law (example 11); `variance_tomography`
   returns the same three numbers.
 - `plan_tomography`, `shots_for_squeezing` -- predicted error bars and
-  the shot count for a target.
+  the shot count for a target. New in 1.20: `kurtosis` plans for shots
+  that are not Gaussian (example 13).
 - `fit_coherence_decay` (returns `DecayFit`, new in 1.17): `T2` from
   an echo decay, and the FWHM of a Gaussian or Lorentzian line from a
   Ramsey decay, with error bars and a fit-quality test (example 10).
@@ -906,14 +955,18 @@ inputs, units and conventions.
 - `cavsqueeze.exact` (needs QuTiP) -- exact master-equation solutions
   for a few distinguishable spins (`full_hilbert`) and the
   permutation-invariant Dicke solver PIQS for identical spins
-  (`dicke_piqs`).
+  (`dicke_piqs`; before 1.20 it had half the intended dephasing, see
+  [Corrections in earlier versions](#corrections-in-earlier-versions)).
 - `cavsqueeze.cumulant_raw` -- the same cumulant equations written in
   raw moments, kept as a test reference.
 - `cavsqueeze.dtwa` -- an independent solver based on the discrete
   truncated Wigner approximation (J. Schachenmayer, A. Pikovski and
   A. M. Rey, Phys. Rev. X 5, 011022 (2015)): many classical
   trajectories started from random samples of the initial state. It
-  covers twisting and detunings (no decay).
+  covers twisting and detunings and, since 1.20, the dephasing of each
+  spin (`gamma_phi`, the same rate `1/T2` as the cumulant solver),
+  applied as a random turn of each spin about z in every step. Collective
+  decay and thermal photons are not covered.
 
 ## When it refuses, and why
 
@@ -1040,6 +1093,21 @@ New in 1.19:
   without a word), or `pulse` gets an `n_steps` that is not a whole
   number of at least 1 (before, 0 ended in `ZeroDivisionError`).
 
+New in 1.20:
+
+- `evolve` is given a continuous measurement (`Rates.meas`) with a rate
+  that is negative or not finite, a detection efficiency `meas_eta`
+  outside (0, 1], or spectator spins (before, an efficiency of 1.5 gave
+  a state that breaks the uncertainty relation, a negative rate made the
+  variance of `J_z` grow, `nan` kept the integrator from finishing, and
+  spectators were left out of the conditioning although they are part
+  of the measured `J_z`);
+- `twist_untwist` gets a signal step `phi` that is zero or not finite
+  (before, `phi = 0` returned a gain of `nan`);
+- `cavsqueeze.dtwa.evolve` gets a dephasing rate `gamma_phi` that is
+  negative or not finite, and the planners get a `kurtosis` below 1, not
+  finite, or not one number or one per angle.
+
 Also: `evolve` raises `RuntimeError` if SciPy's integrator reports a
 failure, and a planned design with fewer than 3 distinct directions is
 reported by `plan_tomography` as `identifiable = False` (and refused
@@ -1047,7 +1115,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-251 tests run on every push to `main` and every pull request, on
+279 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -1068,7 +1136,12 @@ few minutes; most of it is one test of the trajectory solver.
 - For 40 identical spins with decay, thermal absorption and dephasing,
   its Wineland parameter agrees with the exact PIQS solution to 0.2 dB
   and its mean spin to 5 % of `N/2`, up to a twisting strength
-  `chi N t = 1.5`.
+  `chi N t = 1.5`. In this test the dephasing is weak
+  (`gamma_phi t` below 0.002). A second comparison (new in 1.20) has
+  strong dephasing, `gamma_phi t = 0.3` at the end: 0.2 dB and 0.02 in
+  the mean spin (0.11 dB and 0.006 measured). Before 1.20 the PIQS
+  reference had half the intended dephasing (see
+  [Corrections in earlier versions](#corrections-in-earlier-versions)).
 - The production solver (correlations stored with the averages
   subtracted) agrees with the raw-moment form: averages to 1e-8 plus
   1e-5 of their size, correlations to 1e-7, the Wineland parameter to
@@ -1108,6 +1181,19 @@ few minutes; most of it is one test of the trajectory solver.
   with one common detuning and no interaction, the mean spin and the
   covariance at each time equal those at `t = 0` rotated by
   `delta t`, to 1e-9 (new in 1.16; 1.15.1 is off by 1.3e-4 here).
+- Dephasing (new in 1.20). Without interaction the random turns are
+  exact: for 6 spins with different detunings, the mean spin follows
+  `exp(-gamma_phi t)` times free precession within 4 standard errors of
+  the sample mean, and the covariance matrix the exact spin-1/2 values
+  to 0.05 (20000 trajectories). For 4 spins with detunings, twisting
+  and dephasing, the mean spin agrees with the exact master equation to
+  0.08 (0.018 to 0.042 for seeds 1 to 8; leaving the dephasing out
+  misses by 0.29 to 0.32). For 40 identical spins with twisting and
+  strong dephasing (`gamma_phi t = 0.3`), the Wineland parameter agrees
+  with PIQS to 0.35 dB at each time and `<J_x>` to 4 standard errors
+  (4000 trajectories; seeds 1 to 8 give 0.06 to 0.27 dB). With
+  `gamma_phi = 0` the solver draws the same random numbers as before,
+  so seeded results are unchanged.
 
 **Metrology and one-axis twisting**
 
@@ -1215,6 +1301,27 @@ few minutes; most of it is one test of the trajectory solver.
   experiments, between 2 % and 9 % give `p < 0.05`. Rotation angles or
   fringe phases 5 % larger than recorded give `p < 0.01` in each of 20
   experiments.
+
+**Planning for shots that are not Gaussian** (new in 1.20)
+
+- `kurtosis=3` gives the Gaussian plan to 1e-12. For an isotropic state
+  at `K` equally spaced angles, the planned error of `var_min` equals
+  the closed form `V sqrt(f/K)`, `f = kurtosis/M - (M-3)/(M(M-1))`, to
+  1e-12, and with one kurtosis at all angles the covariance is the
+  Gaussian one times `f (M-1)/2` to 1e-12.
+- At the fitted ellipse and with each angle's measured kurtosis, the
+  plan equals the error bars of `estimate_squeezing(...,
+  shot_noise="empirical")` to 1e-9 (shots with a Student t distribution,
+  detection noise subtracted).
+- 300 seeded tomographies (9 angles, 400 shots each): with 5 % of the
+  shots 3 times wider (kurtosis 7.65) and with uniform shots (kurtosis
+  1.8), the scatter of `var_min` is 0.85 to 1.15 times the planned error
+  bar (0.96 and 0.99 measured), while the Gaussian plan is 1.75 times
+  too small and 1.6 times too large.
+- `shots_for_squeezing` with one kurtosis gives the root of the
+  quadratic condition on `M`, solved separately in the test, for 4
+  kurtoses and 3 targets; the count meets the target and one shot fewer
+  does not. With a kurtosis per angle, the same holds.
 
 **Decay fits** (new in 1.17)
 
@@ -1330,8 +1437,9 @@ few minutes; most of it is one test of the trajectory solver.
 Each input that 1.16 accepted with a wrong or `nan` answer and 1.17
 refuses has a test (`tests/test_fixes_117.py`) that fails on 1.16.0.
 Each bug fixed in 1.18 has a test (`tests/test_fixes_118.py`) that
-fails on 1.17.0, and each one fixed in 1.19 a test
-(`tests/test_fixes_119.py`) that fails on 1.18.0. The tutorials are
+fails on 1.17.0, each one fixed in 1.19 a test
+(`tests/test_fixes_119.py`) that fails on 1.18.0, and each one fixed in
+1.20 a test (`tests/test_fixes_120.py`) that fails on 1.19.0. The tutorials are
 run by `tests/test_tutorials.py`, which checks every printed number to
 its last digit.
 The remaining tests check refusals, further identities of the same
@@ -1340,6 +1448,37 @@ condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.20.0 fixes a wrong reference and three unchecked inputs.**
+
+- The exact PIQS reference `cavsqueeze.exact.dicke_piqs` had half the
+  dephasing it was given. PIQS's own dephasing rate makes each spin's
+  coherence decay at half that rate, and the function passed
+  `gamma_phi` to it unchanged, while the rest of the package uses
+  `L_j = sqrt(gamma_phi/2) sigma z_j`, a decay at `gamma_phi`. For 4
+  spins with only dephasing (`gamma_phi = 0.7`), `<J_x>` at `t = 1` was
+  1.409 (`2 exp(-0.35)`) instead of 0.993 (`2 exp(-0.7)`). It now passes
+  `2 gamma_phi`, and agrees with `full_hilbert`, which builds the
+  Lindblad operators explicitly, to 1e-6. The package's own solvers were
+  not affected. The existing 40-spin comparison with the cumulant solver
+  had weak dephasing; its largest difference moves from 0.157 to
+  0.164 dB (tolerance 0.2 dB). With strong dephasing the cumulant solver
+  differed from the old reference by 1.2 dB and agrees with the corrected
+  one to 0.11 dB.
+- The continuous-measurement settings were not checked. With
+  `Rates.meas_eta = 1.5` (an efficiency above 1), `Var(J_y) Var(J_z)`
+  ended at 0.833 of the smallest value the uncertainty relation allows.
+  A negative `Rates.meas` made `Var(J_z)` of 10^6 spins grow to 2.5e11
+  instead of shrinking from 2.5e5, and `nan` kept the integrator from
+  finishing. With spectator spins, which the measurement does not
+  condition, half the spins as spectators gave `Var(J_z)` = 2.08e5 where
+  the measurement of all of `J_z` gives 1.25e5. Each is now refused.
+- `twist_untwist` with `phi = 0` returned a gain of `nan`; a zero or
+  non-finite `phi` is now refused.
+
+Two docstrings were corrected: the `theta` of `dicke_piqs` is measured
+from `+z` (`<J_z> = (N/2) cos theta`), not from the south pole, and
+`cavsqueeze.exact` now states its dephasing convention.
 
 **1.19.0 fixes two input problems.**
 
@@ -1485,11 +1624,14 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 - The solver keeps averages and pair correlations only. Tests bound
   the resulting error for small systems (above); for strongly
   non-Gaussian states it grows.
-- The trajectory solver covers the twisting and the detunings, not
-  decay or thermal photons.
+- The trajectory solver covers the twisting, the detunings and (since
+  1.20) the dephasing of each spin, not collective decay or thermal
+  photons. Its dephasing step is exact without interaction; with
+  interaction it is split from the interaction step, and its accuracy
+  rests on the comparisons above (4 and 40 spins).
 - The continuous-measurement option does not condition the spectator
-  spins of `tail_resolved_classes`; use a discretization without
-  spectators with it.
+  spins of `tail_resolved_classes`, so since 1.20 `evolve` refuses the
+  two together; use a discretization without spectators with it.
 - `fit_coherence_decay` knows only the decays of this model: an
   exponential echo decay and a Gaussian, Lorentzian or (since 1.18)
   Voigt line. Echo decays in solids are often not exponential (spectral
@@ -1508,8 +1650,12 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
   use `shot_noise="empirical"`. That option estimates the kurtosis of
   each angle's shots from the shots themselves, which needs enough
   shots to see the tails (the tests use 400 per angle). The planning
-  functions (`plan_tomography`, `shots_for_squeezing`) still assume
-  Gaussian shots.
+  functions (`plan_tomography`, `shots_for_squeezing`) assume Gaussian
+  shots unless they are given a `kurtosis` (new in 1.20). That kurtosis
+  is your input, measured on shots like the planned ones; the planners
+  do not check it, and a pilot run with few shots measures it poorly.
+  They keep the fit weights of `estimate_squeezing`, which are not the
+  best possible weights when the kurtosis differs between angles.
 - The fitted smallest variance is the smaller of two noisy numbers and
   is biased low. For a coherent state (two equal variances) measured at
   equally spaced angles the bias is about one reported error bar, so

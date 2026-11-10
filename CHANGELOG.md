@@ -1,5 +1,118 @@
 # Changelog
 
+## 1.20.0 (2026-11-10)
+
+Independent-check and planning release: single-spin dephasing in the
+trajectory solver, tomography planning for shots that are not Gaussian,
+a corrected dephasing rate in the exact PIQS reference, and refusals for
+continuous-measurement settings and a readout step that gave wrong
+numbers without an error.
+
+### Added
+
+- `cavsqueeze.dtwa.evolve(..., gamma_phi=...)`: single-spin pure
+  dephasing `L_j = sqrt(gamma_phi/2) sigma z_j` (the rate `1/T2` of
+  `CavityParams.gamma_phi`) in the trajectory solver, which before
+  covered only the twisting and the detunings. The dissipator is exactly
+  the average over random turns of each spin about z with phase variance
+  `2 gamma_phi t` (a stochastic Hamiltonian `(xi_j/2) sigma z_j` with
+  white noise of strength `2 gamma_phi`), so each trajectory turns each
+  spin by a Gaussian angle of variance `gamma_phi dt` before and after
+  each interaction step (Strang splitting). Checked against the closed
+  form without interaction, the exact master equation for 4 spins and
+  PIQS for 40 spins (see Tests). The default 0 draws no extra random
+  numbers, so seeded runs are unchanged. Refuses a negative or
+  non-finite rate.
+- `kurtosis` in `plan_tomography` and `shots_for_squeezing` (default
+  `None`, the Gaussian results of 1.19): one number or one per angle,
+  finite and at least 1. Each sample variance's error becomes the exact
+  `sigma^2 sqrt(kurtosis/M - (M-3)/(M(M-1)))`, carried through the
+  fixed-weight fit exactly (the covariance `variance_tomography` gives
+  with `error_sigmas`), which is the error bar
+  `estimate_squeezing(..., shot_noise="empirical")` reports.
+  `shots_for_squeezing` then finds the smallest shot count by an exact
+  integer search on the plan (the error of a sample variance falls
+  strictly with `M` for any kurtosis of at least 1). This lifts the
+  Limits item "the planning functions still assume Gaussian shots".
+  README example 13: with a measured kurtosis of 7.47, a +/- 0.02 error
+  bar on `xi2_R` costs 71506 shots per angle instead of 22116.
+
+### Fixed
+
+Each fix has a test in `tests/test_fixes_120.py` that fails on 1.19.0.
+
+- `cavsqueeze.exact.dicke_piqs` (the exact PIQS reference used in the
+  tests) had half the dephasing it was given: PIQS's dephasing rate
+  makes each coherence decay at half that rate, and `gamma_phi` was
+  passed unchanged, while the package's convention (and `full_hilbert`)
+  is a decay at `gamma_phi`. For 4 spins with only dephasing
+  (`gamma_phi = 0.7`), `<J_x>` at `t = 1` was 1.409 (`2 exp(-0.35)`) and
+  is now 0.993 (`2 exp(-0.7)`), equal to `full_hilbert` to 1e-6 with
+  every term on. The package's own solvers are unchanged. In
+  `tests/test_exact.py` (40 spins, weak dephasing, `gamma_phi t` below
+  0.002) the largest difference to the cumulant solver moves from 0.157
+  to 0.164 dB (tolerance 0.2 dB); with strong dephasing
+  (`gamma_phi t = 0.3`) the cumulant solver differed from the old
+  reference by 1.2 dB and 2.0 in `<J>`, and from the corrected one by
+  0.11 dB and 0.006.
+- `evolve` did not check the continuous-measurement settings. With
+  `Rates.meas_eta = 1.5` the final `Var(J_y) Var(J_z)` was 0.833 of its
+  smallest allowed value `<J_x>^2 / 4` (it breaks the uncertainty
+  relation); a negative `Rates.meas` made `Var(J_z)` of 10^6 spins grow
+  to 2.5e11 (from 2.5e5); `nan` kept the integrator from finishing; and
+  with half the spins as spectators, which are not conditioned although
+  the measured `J_z` includes them, `Var(J_z)` came out 2.08e5 where
+  measuring all of `J_z` gives 1.25e5 (`Gamma_m N t / 4 = 1`). A rate
+  that is negative or not finite, an efficiency outside (0, 1], and the
+  measurement together with spectators are now refused. Valid settings
+  give the same results as before.
+- `twist_untwist(..., phi=0)` returned a gain of `nan` (the slope is a
+  central difference with steps `+/- phi`); a zero or non-finite `phi`
+  is now refused.
+
+### Changed
+
+- Docstrings of `cavsqueeze.exact`: `dicke_piqs`'s `theta` is measured
+  from `+z` (`<J_z> = (N/2) cos theta` at `t = 0`; the docstring said
+  "from the south pole"), and the module states its dephasing
+  convention. The state was always the one now described.
+- CI: GitHub's `ubuntu-latest` image has moved to Ubuntu 26.04, which
+  lacks some of the Python versions in the test matrix, so
+  `.github/workflows/tests.yml` now runs every job on `ubuntu-24.04`.
+  Nothing else in the workflows changed (`publish.yml` is unchanged).
+- README: example 13 (planning with a kurtosis), the checks of the new
+  features, the 1.20 refusals and corrections, and the Limits items on
+  the trajectory solver, the measurement with spectators and the
+  planners. README examples 1 to 12 print the same output as with
+  1.19.0.
+
+### Tests
+
+- 279 tests pass and 3 skip (1.19.0: 251 and 3; the 3 skipped need the
+  paper's companion scripts), on Python 3.13 and with the oldest allowed
+  dependencies (Python 3.10, NumPy 1.24.0, SciPy 1.10.0, Matplotlib
+  3.7.0, QuTiP 5.0.0). New: `test_fixes_120.py` (each fix above;
+  `dicke_piqs` against the closed form `(N/2) exp(-gamma_phi t)` and
+  against `full_hilbert` to 1e-6, and against the cumulant solver with
+  strong dephasing), `test_dtwa_dephasing_120.py` (without interaction
+  the mean spin within 4 standard errors of `exp(-gamma_phi t)` times
+  free precession and the covariance within 0.05 of the exact spin-1/2
+  values, 20000 trajectories; 4 spins with detunings, twisting and
+  dephasing against the exact master equation to 0.08, 0.018 to 0.042
+  for seeds 1 to 8, while leaving the dephasing out misses by 0.29 to
+  0.32; 40 spins with strong dephasing against PIQS to 0.35 dB and 4
+  standard errors in `<J_x>`, 0.06 to 0.27 dB for seeds 1 to 8) and
+  `test_planning_kurtosis_120.py` (kurtosis 3 equals the Gaussian plan
+  to 1e-12; the isotropic closed form `V sqrt(f/K)` and the scaling by
+  `f (M-1)/2` to 1e-12; the plan equals the empirical error bars of
+  `estimate_squeezing` to 1e-9; 300 seeded tomographies with outliers
+  (kurtosis 7.65) and with uniform shots (1.8), scatter 0.85 to 1.15
+  times the plan (0.96 and 0.99 measured) where the Gaussian plan is off
+  by 1.75 and 0.63 times; the shot count against the separately solved
+  quadratic condition for 4 kurtoses and 3 targets; refusals). The 28
+  new tests take about 20 s together on the (loaded) build machine,
+  most of it the 40-spin trajectory test (12 s).
+
 ## 1.19.0 (2026-10-18)
 
 Readout-calibration release: a projection-noise calibration of the
