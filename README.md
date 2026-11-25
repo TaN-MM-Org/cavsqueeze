@@ -91,7 +91,10 @@ not.
   tuned away from the spins by `Delta` (the **detuning**), this gives
   a twisting strength `chi` and a collective decay rate `Gamma_SR`
   (formulas in `help(cavsqueeze.resonator)`). `g` is the coupling
-  of one spin to the cavity and `kappa` the cavity linewidth.
+  of one spin to the cavity and `kappa` the cavity linewidth. In these
+  formulas `Delta` is the spin frequency minus the cavity frequency
+  (positive when the spins lie above the cavity; see
+  [Corrections in earlier versions](#corrections-in-earlier-versions)).
 - **Inhomogeneous line.** In a solid the spins do not all have the
   same frequency. The spread is the **line**, described by its shape
   (Gaussian, Lorentzian or Voigt) and its full width at half maximum
@@ -161,7 +164,7 @@ Units and conventions:
 ## Examples
 
 Each example runs as written, and the output shown is what it printed
-with cavsqueeze 1.20.0. All device values are illustrative
+with cavsqueeze 1.21.0. All device values are illustrative
 (chosen to show the behavior), not the values of a specific
 experiment. Examples that draw random numbers use a fixed seed.
 
@@ -756,6 +759,97 @@ short tails, such as the binomial projection noise of a few spins,
 the planned ones, for example in a pilot run; with `kurtosis=None` (the
 default) the planners give the Gaussian results of earlier versions.
 
+### 14. Is it right to drop the cavity?
+
+```python
+import numpy as np
+from cavsqueeze import CavityParams, Ensemble
+from cavsqueeze.cumulant_raw import Rates
+from cavsqueeze.exact import full_hilbert, spin_cavity    # needs QuTiP
+
+# Two spins (detunings 0.3 and -0.2, coupling weights 0.9 and 1.1) on the
+# equator, in units where chi g^2 = 1.  The cavity is detuned by Delta and
+# its linewidth is kappa = Delta / 5, so chi g^2 and Gamma_SR g^2 = 0.2 stay
+# the same while g^2 grows with Delta.
+delta, w = np.array([0.3, -0.2]), np.array([0.9, 1.1])
+times = np.linspace(0.0, 3.0, 7)
+for D in (10.0, 40.0, 160.0):
+    kappa = D / 5
+    g = np.sqrt((4 * D**2 + kappa**2) / (4 * D))
+    p = CavityParams(g=g, kappa=kappa, Delta=D, gamma_phi=0.05)
+    full = spin_cavity(p, delta, w, [1, 0, 0], times)          # cavity kept
+    rt = Rates.from_params(p, Ensemble(delta=delta, weight=w, n=np.ones(2)))
+    model = full_hilbert(rt, [1, 0, 0], times)                 # cavity eliminated
+    diff = max(np.max(np.abs(full[k] - model[k])) for k in ("s", "z", "P", "Q", "R", "Z"))
+    print(f"Delta = {D:5.0f}: largest difference {diff:.3f}, "
+          f"photons in the cavity {full['n_photon'].max():.3f}")
+```
+
+```
+Delta =    10: largest difference 0.144, photons in the cavity 0.081
+Delta =    40: largest difference 0.057, photons in the cavity 0.035
+Delta =   160: largest difference 0.014, photons in the cavity 0.008
+```
+
+The solver drops the cavity mode and keeps only its effect on the spins,
+the twisting `chi` and the collective decay `Gamma_SR` (see
+[Limits](#limits)). `cavsqueeze.exact.spin_cavity` (new in 1.21, needs
+QuTiP) keeps the cavity: it solves the exact master equation of a few
+spins together with the cavity's lowest photon-number states. Comparing
+it with the model without the cavity (`full_hilbert`, exact for that
+model) shows how large the error of dropping the cavity is. The printed
+difference is the largest over the mean and pair moments of the spins at
+seven times. It shrinks like `1/Delta` as the cavity is moved away, as
+it should when the dropped terms are of order `g^2/Delta^2`. To check
+your own parameters, scale them down to a few spins while keeping
+`chi g^2`, `Gamma_SR g^2` and the ratios of the rates.
+
+This comparison found two things that 1.20 had wrong (see
+[Corrections in earlier versions](#corrections-in-earlier-versions)):
+`Delta` is the spin frequency minus the cavity frequency, not the reverse
+as the documentation said, and thermal photons in the cavity shift each
+spin's frequency, which the model now includes.
+
+### 15. Atom numbers that are not known exactly
+
+```python
+import numpy as np
+from cavsqueeze import calibrate_projection_noise
+
+# Synthetic, seeded calibration as in example 12 (binomial shots, detector
+# variance 9), but the atom number of each point is only known to 3 %:
+# the recorded N is the true one plus a random error of that size.
+rng = np.random.default_rng(4)
+N_true = np.arange(500.0, 4001.0, 500.0)
+shots = [(rng.random((2000, int(n))) < 0.5).sum(axis=1) - n / 2
+         + rng.normal(0, 3.0, 2000) for n in N_true]
+N_rec = N_true * (1 + 0.03 * rng.normal(size=N_true.size))
+for label, N_sigma in [("N taken as exact", None), ("N_sigma = 3 %", 0.03 * N_rec)]:
+    fit = calibrate_projection_noise(N_rec, shots, N_sigma=N_sigma)
+    print(f"{label:16s}: 4 c1 = {fit.projection_ratio:.3f} +/- "
+          f"{fit.projection_ratio_sigma:.3f}, c0 = {fit.detection_variance:.1f} +/- "
+          f"{fit.detection_variance_sigma:.1f}, fit p = {fit.p_value:.2g}")
+```
+
+```
+N taken as exact: 4 c1 = 0.997 +/- 0.018, c0 = 9.0 +/- 5.4, fit p = 0.011
+N_sigma = 3 %   : 4 c1 = 0.996 +/- 0.025, c0 = 9.1 +/- 7.2, fit p = 0.18
+```
+
+In example 12 the atom numbers were exact. In practice each point's
+`N` is itself measured, with an error. A point whose `N` is off by
+`dN` has its expected variance off by `c1 dN` (`(c1 + 2 c2 N) dN` for
+the parabola). With `N_sigma` (new in 1.21; one number, or one per
+point) `calibrate_projection_noise` adds that to each point's error and
+iterates it with the fit weights. In this run, taking `N` as exact makes
+the error bars too small and the correct straight line looks rejected
+(`p = 0.011`); with `N_sigma` the fit is accepted and the error bars are
+larger. In the tests, over 200 such calibrations, the scatter of `c1` is
+1.37 times its error bar without `N_sigma` and 1.00 times with it, and
+the fit gives `p < 0.05` for 66 of the 200 without it and 7 with it.
+An error that all points share (a wrong scale of `N`) cannot be seen in
+these data and is not covered.
+
 ## Tutorials
 
 Three scripts in the `examples/` folder of the source repository (and,
@@ -826,8 +920,11 @@ inputs, units and conventions.
 **Cavity and spins**
 
 - `CavityParams`, `from_hz` -- coupling `g`, cavity linewidth `kappa`,
-  detuning `Delta`, spin frequency, temperature and dephasing; the
-  twisting and collective-decay rates follow from them.
+  detuning `Delta` (spin frequency minus cavity frequency), spin
+  frequency, temperature and dephasing; the twisting and collective-decay
+  rates follow from them. Since 1.21 `Rates.from_params` also adds the
+  frequency shift that thermal cavity photons give each spin,
+  `2 n_th chi g_j^2`.
 - `thermal_occupation` -- the thermal photon number at a frequency and
   temperature.
 - `loop_gap_dispersive(N, T, T2)` -- the parameters of the dispersive
@@ -939,7 +1036,8 @@ inputs, units and conventions.
   1.19): the readout noise of coherent spin states against the atom
   number, `c0 + c1 N` (or `+ c2 N^2`), with the test of projection noise
   `c1 = 1/4` and the detector variance `c0` with its error bar
-  (example 12).
+  (example 12). New in 1.21: `N_sigma`, the error bars of the atom
+  numbers (example 15).
 - `detection_variance_sigma` (new in 1.19) in `estimate_squeezing`,
   `plan_tomography` and `shots_for_squeezing`: the error bar of the
   subtracted detector variance, added to that of `var_min` in quadrature.
@@ -956,7 +1054,10 @@ inputs, units and conventions.
   for a few distinguishable spins (`full_hilbert`) and the
   permutation-invariant Dicke solver PIQS for identical spins
   (`dicke_piqs`; before 1.20 it had half the intended dephasing, see
-  [Corrections in earlier versions](#corrections-in-earlier-versions)).
+  [Corrections in earlier versions](#corrections-in-earlier-versions)),
+  both for the model without the cavity, and (new in 1.21)
+  `spin_cavity`, a few spins together with the cavity mode itself
+  (example 14).
 - `cavsqueeze.cumulant_raw` -- the same cumulant equations written in
   raw moments, kept as a test reference.
 - `cavsqueeze.dtwa` -- an independent solver based on the discrete
@@ -1108,6 +1209,24 @@ New in 1.20:
   negative or not finite, and the planners get a `kurtosis` below 1, not
   finite, or not one number or one per angle.
 
+New in 1.21:
+
+- `load_shots_csv` meets a value that is not a finite number; the
+  message names the line (before, an infinite `J_z` was loaded, every row
+  with the angle `nan` became an angle of one shot, and text gave
+  Python's message without the line);
+- `optimal_squeezing` gets an `n_coarse` below 2 (1 used to scan `t_lo`
+  alone and return it as the best time), a `max_fine` below 8 or a
+  `points_per_period` that is not finite and positive, and
+  `squeezing_trace` an empty list of times (before, an `IndexError`);
+- `cavsqueeze.dtwa.evolve` gets fewer than 2 trajectories (1 gave a
+  covariance of `nan`), detunings and couplings of different lengths, or
+  non-finite detunings, couplings or `chi1`;
+- `calibrate_projection_noise` gets an `N_sigma` that is negative, not
+  finite, or not one number or one per point;
+- `exact.spin_cavity` gets detunings and weights of different lengths or
+  fewer than 2 photon-number states.
+
 Also: `evolve` raises `RuntimeError` if SciPy's integrator reports a
 failure, and a planned design with fewer than 3 distinct directions is
 reported by `plan_tomography` as `identifiable = False` (and refused
@@ -1115,7 +1234,7 @@ by `shots_for_squeezing`).
 
 ## How the results are checked
 
-279 tests run on every push to `main` and every pull request, on
+297 tests run on every push to `main` and every pull request, on
 Python 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.10
 with the oldest versions the package allows (NumPy 1.24.0, SciPy 1.10.0,
 Matplotlib 3.7.0, QuTiP 5.0.0). A further job runs on Python 3.14
@@ -1161,6 +1280,24 @@ few minutes; most of it is one test of the trajectory solver.
   6-spin master-equation solution to 0.2 %. This test uses QuTiP only;
   it checks the formula, not the solver.
 
+**Dropping the cavity** (new in 1.21)
+
+- Two spins with detunings and uneven couplings, against the exact
+  master equation with the cavity mode kept (`exact.spin_cavity`). With
+  `chi g^2` and `Gamma_SR g^2` held fixed while the cavity is detuned
+  further, the largest difference in any mean or pair moment falls like
+  `1/Delta`: 0.0216, 0.0118 and 0.0062 for `Delta` = 40, 80 and 160
+  `chi g^2` (`kappa = Delta`, 0.2 thermal photons, ratios 1.83 and 1.91;
+  the test asks for 1.6 to 2.4 and below 0.01 at the end). Without the
+  thermal-photon shift (as in 1.20) the difference stays at 0.060 to
+  0.065. With `kappa = Delta/5` and no thermal photons the difference
+  is 0.028 for `Delta = +80` and 0.031 for `-80` (test: below 0.05);
+  with the sign of `chi` flipped it is 0.54. The highest kept
+  photon-number state never holds more than 1.2e-7 of the population.
+- For a line symmetric about the spin frequency, flipping the sign of
+  `Delta` mirrors the state (`J_y -> -J_y`): `xi2` equal to 6e-14
+  relative, the contrast exactly, with thermal photons on.
+
 **The independent trajectory solver**
 
 - For 200 identical spins, its best Wineland parameter matches the
@@ -1171,6 +1308,10 @@ few minutes; most of it is one test of the trajectory solver.
   seed.
 - Making its time step four times smaller (200 to 800 steps) changes
   the answer by less than 0.01 dB.
+- Its equations, rewritten in 1.21 with fewer array operations, equal
+  the 1.20 code (kept in `tests/test_dtwa_speed_121.py`) to 2.4e-16 of
+  the largest derivative, and a seeded run with detunings, twisting and
+  dephasing gives the 1.20 moments to 8e-16 (test: 1e-12 and 1e-9).
 - Without interaction, a Gaussian line dephases as `exp(-t^2/2)` to
   0.02.
 - For 4 spins with different detunings, its mean spin follows exact
@@ -1322,6 +1463,10 @@ few minutes; most of it is one test of the trajectory solver.
   quadratic condition on `M`, solved separately in the test, for 4
   kurtoses and 3 targets; the count meets the target and one shot fewer
   does not. With a kurtosis per angle, the same holds.
+- Without a kurtosis (new in 1.21): with the target set to the error bar
+  that `m` shots give, `shots_for_squeezing` returns `m` (for 50, 1000
+  and 22116 shots, and 40 random counts with a detection-variance error),
+  and `m - 1` shots miss the target.
 
 **Decay fits** (new in 1.17)
 
@@ -1383,6 +1528,15 @@ few minutes; most of it is one test of the trajectory solver.
 - With 5 % of detector shots at 4 times the width, the Gaussian error bar
   of `c0` is more than 1.3 times too small over 200 seeds, and the
   empirical one is within 0.8 to 1.2 times the scatter.
+- Atom numbers with 3 % errors (new in 1.21), 200 seeds: with `N_sigma`
+  the scatter of `c0` and `c1` is 0.89 to 1.00 times the reported error
+  bars (test: 0.8 to 1.2) for the line and the parabola, with no bias
+  beyond 3 standard errors, and 7 and 12 of the 200 fits give `p < 0.05`
+  (10 expected); without it the scatter of `c1` is 1.37 and 1.24 times
+  the error bar and 66 and 59 fits give `p < 0.05`. At the converged
+  weights the coefficients and covariance equal NumPy's `polyfit` to
+  1.3e-13 of the error bars, the weights equal the formula rebuilt in the
+  test to 8e-13, and `N_sigma=None` gives exactly the 1.20 fit.
 - The whole chain (calibration, then a tomography fit with
   `detection_variance` and `detection_variance_sigma`), 200 seeds: the
   scatter of `xi2_S` is 0.8 to 1.2 times the reported error bar, and
@@ -1438,8 +1592,10 @@ Each input that 1.16 accepted with a wrong or `nan` answer and 1.17
 refuses has a test (`tests/test_fixes_117.py`) that fails on 1.16.0.
 Each bug fixed in 1.18 has a test (`tests/test_fixes_118.py`) that
 fails on 1.17.0, each one fixed in 1.19 a test
-(`tests/test_fixes_119.py`) that fails on 1.18.0, and each one fixed in
-1.20 a test (`tests/test_fixes_120.py`) that fails on 1.19.0. The tutorials are
+(`tests/test_fixes_119.py`) that fails on 1.18.0, each one fixed in
+1.20 a test (`tests/test_fixes_120.py`) that fails on 1.19.0, and each one
+fixed in 1.21 a test (`tests/test_fixes_121.py` and, for the cavity terms,
+`tests/test_spin_cavity_121.py`) that fails on 1.20.0. The tutorials are
 run by `tests/test_tutorials.py`, which checks every printed number to
 its last digit.
 The remaining tests check refusals, further identities of the same
@@ -1448,6 +1604,45 @@ condition and a conserved quantity), and that the version number is
 the same in the package, its metadata and CITATION.cff.
 
 ## Corrections in earlier versions
+
+**1.21.0 corrects the sign convention of the detuning and adds a missing
+thermal term.** Both came to light when the model without the cavity was
+compared with the exact model that keeps it (example 14).
+
+- `CavityParams` documented `Delta` as the cavity frequency minus the
+  spin frequency. With the package's
+  Hamiltonian `+chi J+ J-` and `chi = 4 g^2 Delta/(4 Delta^2 + kappa^2)`,
+  the full spin-cavity model is matched only when `Delta` is the spin
+  frequency minus the cavity frequency: for two spins the mean and pair
+  moments then agree to 0.028, and with the other sign they miss by
+  0.54. The documentation now says so; the code and all numbers are
+  unchanged. For a line symmetric about the spin frequency the sign
+  changes neither `xi2` nor the contrast (the state is mirrored,
+  `J_y -> -J_y`); it sets the direction of the frequency shifts and of
+  the twist, and it matters for a line that is not symmetric.
+- Thermal photons in the cavity shift each spin's frequency by
+  `2 n_th chi g_j^2` (the photon-number part of the dispersive shift; its
+  vacuum part, `chi g_j^2`, was already in the model). Without it the
+  model did not approach the full one as the cavity was detuned further:
+  with 0.2 thermal photons the difference stayed at 0.06 instead of
+  falling like `1/Delta`. `Rates.from_params` now adds the shift to the
+  class detunings. At zero temperature nothing changes. For a uniform
+  coupling it is a common shift, which changes no squeezing parameter and
+  no contrast; with uneven couplings its effect is of relative size
+  `1/N`: for 1000 spins with couplings spread by a factor 4 and 0.19
+  thermal photons (80 mK at 3.08 GHz), `xi2` after a 20 us echo twist moves
+  by 5e-5 dB, and for 10^8 spins by 3e-11 dB.
+
+Some inputs that gave wrong or `nan` results without an error are now
+refused (see
+[When it refuses, and why](#when-it-refuses-and-why)), and
+`shots_for_squeezing` (without a kurtosis) could return one shot more
+than needed: when the target was exactly an error bar that `m` shots
+give, rounding in its closed form returned `m + 1` (for 1000 and 22116
+shots in the design of example 6, and for 23 of 40 random counts in the
+test). It now checks the count on the plan itself. Targets that are not
+exactly reachable (as in examples 6 and 13) give the same counts as
+before.
 
 **1.20.0 fixes a wrong reference and three unchecked inputs.**
 
@@ -1620,7 +1815,11 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 
 - The cavity is eliminated: its field follows the spins instantly,
   which holds when the cavity is far detuned or much faster than the
-  spin dynamics.
+  spin dynamics. Since 1.21 `exact.spin_cavity` measures the error of
+  this for a few spins (example 14; the error falls like `1/Delta`), but
+  only a few spins fit in it, so for a large ensemble the error has to be
+  judged from scaled-down cases. The solver itself still has no cavity
+  mode.
 - The solver keeps averages and pair correlations only. Tests bound
   the resulting error for small systems (above); for strongly
   non-Gaussian states it grows.
@@ -1668,12 +1867,16 @@ The full history is in [CHANGELOG.md](CHANGELOG.md).
 - The Voigt line's quantiles come from a tabulated cumulative
   distribution (checked to 1e-7 against numerical integration).
 - The bosonic export keeps second moments only.
-- `calibrate_projection_noise` treats the atom numbers as exact. An error
-  in N that is common to all points scales `c1` (and so
-  `projection_ratio`), and point-to-point errors in N are not included in
-  the error bars. Its p-values, like those of the tomography fit, assume
-  nearly Gaussian sample variances (the tests use 1500 or more shots per
-  point).
+- `calibrate_projection_noise` treats the atom numbers as exact unless
+  it is given `N_sigma` (new in 1.21), which covers independent errors
+  of each point. An error in N that is common to all points scales `c1`
+  (and so `projection_ratio`) and cannot be found from the calibration
+  itself. With `N_sigma` the parabola's error bars are first-order (they
+  drop the term `c2 dN^2`), and errors in N pull the fitted slope towards
+  zero by a fraction of order `(N_sigma / spread of N)^2`, which is
+  small when the atom numbers are spread much wider than their errors. Its p-values, like
+  those of the tomography fit, assume nearly Gaussian sample variances
+  (the tests use 1500 or more shots per point).
 
 ## Where it comes from
 
