@@ -118,7 +118,7 @@ def test_model_weights_remove_the_weighting_bias():
         if w == "model":
             assert abs(c.mean() - c_true) < 3.0 * se, (c.mean(), se)
         else:
-            # the 1.15 behaviour: 14.4 % low with this seed
+            # the 1.15 behavior: 14.4 % low with this seed
             assert c.mean() < c_true - 10.0 * se
             assert 0.83 < c.mean() / c_true < 0.89
 
