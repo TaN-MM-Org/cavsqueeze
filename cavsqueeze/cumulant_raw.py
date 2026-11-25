@@ -8,7 +8,9 @@ Effective master equation (cavity adiabatically eliminated):
     L_j = sqrt(gamma_phi/2) sigma z_j      (individual pure dephasing)
 
 with G_j = g * w_j the coupling of spin j, chi1 = 4 Delta/(4 Delta^2 + kappa^2)
-and Gamma_SR = 4 kappa/(4 Delta^2 + kappa^2).
+and Gamma_SR = 4 kappa/(4 Delta^2 + kappa^2) (Delta = omega_s - omega_c, see
+`cavsqueeze.resonator`).  The detuning delta_j of `Rates.from_params`
+includes the thermal-photon shift 2 n_th chi1 G_j^2 (since 1.21).
 
 Spins are grouped into M classes of identical spins.  State variables:
     s[m]    = <sigma+_a>,           a in m
@@ -47,13 +49,26 @@ class Rates:
 
     @classmethod
     def from_params(cls, params: CavityParams, ens: Ensemble) -> "Rates":
+        """The rates of `params` for the classes of `ens`.
+
+        delta is the line detuning of each class plus, since 1.21, the shift
+        2 n_th chi1 G^2 that the thermal photons of the cavity give each spin
+        (the photon-number part of the dispersive shift; the vacuum part,
+        chi1 G^2, is the self term j = k of the exchange Hamiltonian and was
+        always included).  Without it the model did not approach the full
+        spin-cavity model as the cavity is detuned further
+        (tests/test_spin_cavity_121.py).  At zero temperature delta is the
+        line detuning, as before.  Spectator spins (`cavsqueeze.cumulant`)
+        get neither shift: they are propagated without any cavity term.
+        """
         denom = 4.0 * params.Delta**2 + params.kappa**2
         chi1 = 4.0 * params.Delta / denom
         Gsr = 4.0 * params.kappa / denom
         nth = params.n_th
+        G = params.g * ens.weight
         return cls(
-            delta=ens.delta.copy(),
-            G=params.g * ens.weight,
+            delta=ens.delta + 2.0 * nth * chi1 * G**2,
+            G=G,
             n=ens.n.copy(),
             chi1=chi1,
             Gd=Gsr * (nth + 1.0),
@@ -181,7 +196,7 @@ def rotate(st: State, axis, angle: float) -> State:
 # ---------------------------------------------------------------------------
 
 def collective_moments(st: State, n: np.ndarray, weights=None):
-    """Mean vector <J> and symmetrised covariance matrix of the collective spin
+    """Mean vector <J> and symmetrized covariance matrix of the collective spin
     J_alpha = 1/2 sum_a c_a sigma^alpha_a with c_a = 1 (weights None) or the
     supplied per-class weights.  Returns (J, Cov, S1, S2) where S1 = sum c_a and
     S2 = sum c_a^2."""

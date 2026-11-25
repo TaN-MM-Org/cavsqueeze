@@ -180,7 +180,7 @@ def rotate_classes(st: State, axis, angles, spec_angles=None) -> State:
 
 
 def collective_moments(st: State, n, weights=None, spec_n=None, spec_weights=None):
-    """Mean <J> and symmetrised covariance of J_alpha = 1/2 sum_a c_a sigma^alpha_a,
+    """Mean <J> and symmetrized covariance of J_alpha = 1/2 sum_a c_a sigma^alpha_a,
     including spectator spins (uncorrelated, each in a pure state with Bloch vector vs)."""
     n = np.asarray(n, float)
     c = np.ones(st.M) if weights is None else np.asarray(weights, float)

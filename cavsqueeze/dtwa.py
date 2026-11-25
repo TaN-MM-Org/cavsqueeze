@@ -81,6 +81,26 @@ def _rhs(t, y, delta, G, chi1, n_traj, n_spins):
     return np.concatenate([ds.ravel().view(np.float64), dz.ravel()])
 
 
+def _deriv(s, z, G, a, chi1):
+    """Time derivatives (ds, dz) of all samples, s of shape (n_traj, n_spins):
+
+        ds_j = i (a_j s_j - chi1 G_j z_j sum_{k != j} G_k s_k),
+        dz_j = 4 chi1 G_j Im(s_j conj(sum_{k != j} G_k s_k)),
+
+    with a = delta + chi1 G^2.  Since 1.21 the sum over k != j is the full
+    sum minus the j term, chi1 G_j z_j (coll - G_j s_j) = chi1 G_j z_j coll
+    - chi1 G_j^2 z_j s_j, and the j term drops out of dz because
+    s_j conj(G_j s_j) is real.  These are the 1.20 equations with fewer
+    array operations; tests/test_dtwa_speed_121.py compares them with the
+    1.20 form."""
+    coll = s @ G
+    ds = (a + (chi1 * G ** 2) * z) * s
+    ds -= ((chi1 * G) * z) * coll[:, None]
+    ds *= 1j
+    dz = (4.0 * chi1 * G) * (s.imag * coll.real[:, None] - s.real * coll.imag[:, None])
+    return ds, dz
+
+
 def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_steps=400,
            gamma_phi=0.0):
     """Propagate `n_traj` samples of the coherent spin state along +x.
@@ -115,6 +135,21 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     global last_steps
     delta = np.asarray(delta, float)
     G = np.asarray(G, float)
+    # since 1.21: before, n_traj = 1 returned a covariance of nan (one
+    # sample has no spread), a delta and G of different lengths ended in a
+    # NumPy broadcasting error, and a nan chi1 or detuning gave nan moments
+    if not (delta.ndim == 1 and delta.shape == G.shape and delta.size >= 1):
+        raise ValueError("delta and G must be 1-D arrays with one value per spin "
+                         f"(got shapes {delta.shape} and {G.shape})")
+    if not (np.all(np.isfinite(delta)) and np.all(np.isfinite(G)) and np.isfinite(chi1)):
+        raise ValueError("delta, G and chi1 must be finite")
+    if not (isinstance(n_traj, (int, np.integer)) and not isinstance(n_traj, bool)
+            and n_traj >= 2):
+        raise ValueError(f"n_traj must be a whole number >= 2; got {n_traj!r}")
+    if not (np.isfinite(steps_per_rad) and steps_per_rad > 0 and np.isfinite(min_steps)
+            and min_steps >= 1):
+        raise ValueError("steps_per_rad must be finite and positive and min_steps >= 1; got "
+                         f"{steps_per_rad} and {min_steps}")
     n_spins = len(delta)
     chiN = chi1 * float(np.sum(G ** 2))
     t_eval = np.asarray(t_eval, float)
@@ -141,11 +176,7 @@ def evolve(delta, G, chi1, t_eval, n_traj=2000, seed=0, steps_per_rad=12.0, min_
     a = delta + chi1 * G ** 2
 
     def deriv(s, z):
-        coll = (s * G).sum(axis=1)
-        other = coll[:, None] - G * s
-        ds = 1j * (a * s - chi1 * G * z * other)
-        dz = 4.0 * chi1 * G * np.imag(s * np.conj(other))
-        return ds, dz
+        return _deriv(s, z, G, a, chi1)
 
     out = {}
     t_now = 0.0

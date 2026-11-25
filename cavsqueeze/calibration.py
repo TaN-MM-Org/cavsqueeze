@@ -47,6 +47,14 @@ variances.  ``shot_noise`` has the meaning it has in `estimate_squeezing`:
 kurtosis of each point's shots, propagated exactly through the
 fixed-weight fit.  The error bars are those of a linear estimator, and the
 p-values assume nearly Gaussian sample variances (many shots per point).
+
+Errors of the atom numbers (new in 1.21): ``N_sigma`` gives each point's
+N an error bar.  The point's expected variance is then uncertain by
+(c1 + 2 c2 N) N_sigma, which is added to the error of its sample variance
+in quadrature and iterated with the weights.  The tests check, over 200
+seeded calibrations with 3 % errors in N, that the error bars then match the
+scatter and the p-values have their stated distribution, while without
+``N_sigma`` the error bar of c1 is too small.
 """
 from __future__ import annotations
 
@@ -88,6 +96,9 @@ class ProjectionNoiseFit:
         (from the fitted curve; with shot_noise="empirical", from the
         fitted curve and each point's measured kurtosis).
     shots_per_point, shot_noise, n_reweight : bookkeeping.
+    N_sigma : the error bars of the atom numbers used (new in 1.21), or None
+        when the atom numbers were taken as exact.  With them,
+        variance_sigmas include their part.
     """
 
     detection_variance: float
@@ -111,6 +122,7 @@ class ProjectionNoiseFit:
     shots_per_point: np.ndarray
     shot_noise: str
     n_reweight: int
+    N_sigma: np.ndarray | None = None
 
 
 def _fit(X, y, sg, es=None):
@@ -129,8 +141,8 @@ def _fit(X, y, sg, es=None):
 
 
 def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
-                               shot_noise: str = "gaussian"
-                               ) -> ProjectionNoiseFit:
+                               shot_noise: str = "gaussian",
+                               N_sigma=None) -> ProjectionNoiseFit:
     """Fit the readout noise of coherent spin states against the atom
     number (new in 1.19; see the module docstring).
 
@@ -143,14 +155,32 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
     quadratic : also fit a term c2 N^2 (noise common to all spins).
     shot_noise : "gaussian" (default) or "empirical", as in
         `estimate_squeezing`.
+    N_sigma : None (default: the atom numbers are exact, the results of
+        1.20), or the error bar of each atom number (one number for all, or
+        one per point; finite and >= 0), for errors that differ from point
+        to point and are independent of the shots (new in 1.21).  A point
+        whose N is off by dN has its expected variance off by
+        (c1 + 2 c2 N) dN, so its error becomes
+        sqrt(sigma_s2^2 + ((c1 + 2 c2 N) N_sigma)^2), with c1 and c2 from the
+        fitted curve and iterated with the weights.  For the straight line
+        this adds the two independent errors exactly; for the parabola it
+        drops the term c2 dN^2, which is small when N_sigma is much smaller
+        than N.  The fit still uses the given N, so the slope is pulled
+        towards zero by a fraction of order N_sigma^2 / (spread of N)^2
+        (errors in the horizontal coordinate do that; in the tests, with
+        3 % errors, the bias is below 3 standard errors of 200 runs);
+        keep the atom numbers spread much wider than their errors.  An
+        error of N that is common to all points (a wrong scale) cannot be
+        found from these data and is not covered: it scales c1.
 
     Returns a :class:`ProjectionNoiseFit`.  Refuses (ValueError) inputs of
     different lengths, non-finite or non-positive atom numbers, fewer than
     2 shots or non-finite shots at a setting, identical shots, fewer
     settings than coefficients plus one (no test of the fit), fewer
-    distinct atom numbers than coefficients, and a fitted variance curve
+    distinct atom numbers than coefficients, a fitted variance curve
     that reaches zero or below at a measured atom number (it cannot then
-    set the weights).
+    set the weights), and an N_sigma that is negative, not finite, or not
+    one value or one per point.
     """
     Nv = np.asarray(N_values, dtype=float).ravel()
     rows = [np.asarray(s, dtype=float).ravel() for s in shots]
@@ -172,6 +202,16 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
     if Nv.size < npar + 1:
         raise ValueError(f"need at least {npar + 1} atom numbers to fit {npar} "
                          f"coefficients and test the fit; got {Nv.size}")
+    if N_sigma is None:
+        sN = np.zeros_like(Nv)
+    else:
+        sN = np.asarray(N_sigma, dtype=float)
+        if sN.ndim > 1 or (sN.ndim == 1 and sN.shape != Nv.shape):
+            raise ValueError("N_sigma must be one number or one value per atom number; "
+                             f"got shape {sN.shape} for {Nv.size} atom numbers")
+        if not (np.all(np.isfinite(sN)) and np.all(sN >= 0.0)):
+            raise ValueError(f"N_sigma must be finite and >= 0; got {N_sigma}")
+        sN = np.broadcast_to(sN, Nv.shape).astype(float)
     if np.unique(Nv).size < npar:
         raise ValueError(f"need at least {npar} distinct atom numbers; got "
                          f"{np.unique(Nv).size}")
@@ -191,8 +231,21 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
         raise ValueError("the atom numbers do not separate the coefficients; "
                          "spread them over a wider range")
     gauss = np.sqrt(2.0 / (M - 1))
+    # d curve / d N at each point, in the scaled units (u = N / scale)
+    dX = np.column_stack([k * u ** (k - 1) if k else np.zeros_like(u)
+                          for k in range(npar)]) / scale
+    with_N = bool(np.any(sN > 0.0))
+
+    def n_term(beta):
+        """The error that the atom-number errors give each point's expected
+        variance, (c1 + 2 c2 N) N_sigma (zero without N_sigma)."""
+        return (dX @ beta) * sN
+
     sig = s2 * gauss                       # start: weights from the samples
     beta, cov = _fit(X, s2, sig)
+    if with_N:
+        sig = np.hypot(sig, n_term(beta))
+        beta, cov = _fit(X, s2, sig)
     n_refit = 0
     while True:
         curve = X @ beta
@@ -203,6 +256,8 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
                 "variances do not follow the law (check the data, or take more "
                 "shots per point)")
         new = curve * gauss
+        if with_N:
+            new = np.hypot(new, n_term(beta))
         if np.max(np.abs(new / sig - 1.0)) <= 1e-12:
             break
         if n_refit == _MAX_REWEIGHT:
@@ -214,7 +269,10 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
     es = None
     if shot_noise == "empirical":
         kurt = np.array([_sample_kurtosis(r) for r in rows])
-        es = (sig / gauss) * np.sqrt(_var_s2_factor(kurt, M))
+        if with_N:
+            es = np.hypot((X @ beta) * np.sqrt(_var_s2_factor(kurt, M)), n_term(beta))
+        else:
+            es = (sig / gauss) * np.sqrt(_var_s2_factor(kurt, M))
         beta, cov = _fit(X, s2, sig, es)
     chi2, dof, p_value = _goodness_of_fit(X, sig, sig if es is None else es,
                                           s2 - X @ beta)
@@ -234,4 +292,5 @@ def calibrate_projection_noise(N_values, shots, quadratic: bool = False,
         names=names, values=values, cov=cov, chi2=chi2, dof=dof, p_value=p_value,
         N_values=Nv, variances=s2, variance_sigmas=sig if es is None else es,
         shots_per_point=M,
-        shot_noise=shot_noise, n_reweight=int(n_refit))
+        shot_noise=shot_noise, n_reweight=int(n_refit),
+        N_sigma=sN.copy() if with_N else None)

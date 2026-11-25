@@ -68,8 +68,9 @@ def load_shots_csv(path):
     `estimate_squeezing` or `estimate_contrast`.
 
     Refusals instead of guesses: wrong header or field count,
-    non-numeric values, or an angle carrying fewer than 2 shots (one
-    shot has no variance and no standard error).
+    non-numeric or (since 1.21) non-finite values, each with its line
+    number, or an angle carrying fewer than 2 shots (one shot has no
+    variance and no standard error).
     """
     order = []
     groups = {}
@@ -87,8 +88,20 @@ def load_shots_csv(path):
                 continue
             if len(rec) != 2:
                 raise ValueError(f"line {line}: expected 2 fields")
-            t = float(rec[0])
-            v = float(rec[1])
+            # since 1.21 a value that is not a finite number is refused
+            # with its line number; before, "abc" gave Python's message
+            # without the line, an infinite J_z was loaded, and every row
+            # with the angle "nan" became an angle of its own, refused as
+            # "angle nan carries 1 shot(s)"
+            try:
+                t = float(rec[0])
+                v = float(rec[1])
+            except ValueError:
+                raise ValueError(f"line {line}: {rec!r} is not a pair of "
+                                 "numbers") from None
+            if not (np.isfinite(t) and np.isfinite(v)):
+                raise ValueError(f"line {line}: {rec!r} is not finite "
+                                 "(angles and J_z must be finite numbers)")
             if t not in groups:
                 groups[t] = []
                 order.append(t)

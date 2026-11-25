@@ -202,7 +202,9 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
     Exact inversion of the planned covariance: every per-angle weight
     scales as sqrt(M - 1), so the tomography part of the Wineland
     error bar scales as 1/sqrt(M - 1) exactly, and the smallest
-    integer M meeting the target follows in closed form -- no search.
+    integer M meeting the target follows in closed form.  Since 1.21 that
+    M is checked on the plan itself (M meets the target, M - 1 does not),
+    which moves it by one shot when rounding put it one too high.
 
     With ``kurtosis`` (new in 1.20; see `plan_tomography`) the error of
     each sample variance scales as sqrt(kurtosis / M - (M - 3) / (M (M - 1)))
@@ -281,7 +283,24 @@ def shots_for_squeezing(target_xi2_R_sigma: float, angles,
     need = np.sqrt(max(t ** 2 - floor ** 2, 0.0))
     m = int(np.ceil(1.0 + (tom_at_2 / need) ** 2))
     m = max(m, 2)
-    plan = plan_tomography(angles, m, var_min, var_max, theta_min, N,
-                           contrast, contrast_sigma,
-                           detection_variance, vdet_sigma)
+
+    def plan_at(m):
+        return plan_tomography(angles, m, var_min, var_max, theta_min, N,
+                               contrast, contrast_sigma,
+                               detection_variance, vdet_sigma)
+
+    # The closed form can land one shot off when the target is (to rounding)
+    # an error bar the plan reaches exactly: before 1.21,
+    # shots_for_squeezing(plan_tomography(..., m, ...)["xi2_R_sigma"], ...)
+    # returned m + 1 for about half of all designs.  Check the neighbors on
+    # the plan itself, which is what the result promises.
+    plan = plan_at(m)
+    while plan["xi2_R_sigma"] > t:
+        m += 1
+        plan = plan_at(m)
+    while m > 2:
+        below = plan_at(m - 1)
+        if below["xi2_R_sigma"] > t:
+            break
+        m, plan = m - 1, below
     return m, plan

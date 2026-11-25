@@ -93,6 +93,10 @@ def squeezing_after(params: CavityParams, ens: Ensemble, t: float, echo: bool = 
 
 
 def squeezing_trace(params: CavityParams, ens: Ensemble, t_list, echo: bool = True, weights=None, **kw):
+    """`squeezing_after` at each time of ``t_list`` (s); returns a dict of
+    arrays.  An empty list is refused (since 1.21; before, an IndexError)."""
+    if np.size(t_list) == 0:
+        raise ValueError("t_list must hold at least one time (s)")
     out = [squeezing_after(params, ens, t, echo=echo, weights=weights, **kw) for t in t_list]
     return {k: np.array([o[k] for o in out]) for k in out[0]}
 
@@ -111,9 +115,21 @@ def optimal_squeezing(params: CavityParams, ens: Ensemble, t_lo: float, t_hi: fl
     parameter at the collective gap frequency.  (Docstrings before 1.17 said
     the scan covered [t*/2, 2 t*]; the code has always used the neighbors.)
     Returns the `squeezing_after` dict at the best time scanned, plus the
-    whole scan as scan_t and scan_xi2."""
+    whole scan as scan_t and scan_xi2.  Refuses limits that do not satisfy
+    0 < t_lo < t_hi and (since 1.21) an n_coarse below 2, a max_fine below 8
+    or a points_per_period that is not finite and positive."""
     if not (np.isfinite(t_lo) and np.isfinite(t_hi) and 0 < t_lo < t_hi):
         raise ValueError(f"need 0 < t_lo < t_hi; got t_lo={t_lo}, t_hi={t_hi}")
+    # since 1.21; before, n_coarse = 1 scanned t_lo alone and returned it as
+    # the best time, max_fine below 8 overrode the minimum of 8 fine points
+    # (0 left out the fine scan), and points_per_period = nan gave 8 points
+    # without a word
+    if not (_whole(n_coarse) and n_coarse >= 2):
+        raise ValueError(f"n_coarse must be a whole number >= 2; got {n_coarse!r}")
+    if not (_whole(max_fine) and max_fine >= 8):
+        raise ValueError(f"max_fine must be a whole number >= 8; got {max_fine!r}")
+    if not (np.isfinite(points_per_period) and points_per_period > 0):
+        raise ValueError(f"points_per_period must be finite and positive; got {points_per_period!r}")
     rt = Rates.from_params(params, ens)
     ts = np.geomspace(t_lo, t_hi, n_coarse)
     coarse = [squeezing_after(params, ens, t, echo=echo, weights=weights, **kw) for t in ts]
@@ -136,6 +152,11 @@ def optimal_squeezing(params: CavityParams, ens: Ensemble, t_lo: float, t_hi: fl
     best["scan_t"] = all_t
     best["scan_xi2"] = all_v
     return best
+
+
+def _whole(k) -> bool:
+    """True for a Python or NumPy integer (not a bool)."""
+    return isinstance(k, (int, np.integer)) and not isinstance(k, (bool, np.bool_))
 
 
 def _sorted_times(t_list):

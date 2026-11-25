@@ -1,12 +1,16 @@
 """Exact master-equation references (QuTiP) for validating the cumulant solver.
 
-Two references are provided:
+Three references are provided:
   * `full_hilbert`: N distinguishable spins with arbitrary detunings and
-    couplings (N <= ~10).
+    couplings (N <= ~10), under the model with the cavity eliminated.
   * `dicke_piqs`: N identical spins (homogeneous) using the permutation
-    invariant (Dicke) solver PIQS (N up to a few hundred).
+    invariant (Dicke) solver PIQS (N up to a few hundred), same model.
+  * `spin_cavity` (new in 1.21): a few spins together with the cavity mode
+    itself, not eliminated.  It checks the elimination: the rates chi and
+    Gamma_SR of `cavsqueeze.resonator`, the sign of the detuning, and how
+    large the error of the elimination is for given parameters.
 
-Both use the package's dephasing convention L_j = sqrt(gamma_phi/2) sigma z_j
+All use the package's dephasing convention L_j = sqrt(gamma_phi/2) sigma z_j
 (each spin's coherence decays as exp(-gamma_phi t)); since 1.20 the PIQS
 reference does too (before, it had half that dephasing).
 """
@@ -96,6 +100,110 @@ def full_hilbert(rt_spins: Rates, bloch, times, extra_ops=None):
     return out
 
 
+def spin_cavity(params, delta, weights, bloch, times, n_fock: int = 8):
+    """Exact evolution of a few spins coupled to the cavity mode itself
+    (new in 1.21), with no adiabatic elimination.
+
+    In the frame that turns at the spin frequency omega_s,
+
+        H = -Delta a^dag a + sum_j (delta_j / 2) sigma z_j
+            + g sum_j w_j (a^dag sigma-_j + a sigma+_j),
+
+    with the cavity damped at the rate kappa (its full linewidth) towards a
+    bath with n_th thermal photons: jump operators sqrt(kappa (n_th + 1)) a
+    and sqrt(kappa n_th) a^dag, plus the dephasing L_j = sqrt(gamma_phi/2)
+    sigma z_j.  Here Delta = params.Delta, which in this package's formulas
+    is omega_s - omega_c (the cavity sits at -Delta in this frame; see
+    `cavsqueeze.resonator`).  The cavity starts in the thermal state with
+    n_th photons and the spins in the product state with Bloch vector
+    ``bloch``.
+
+    params : CavityParams (g, kappa, Delta, n_th from omega_s and T,
+        gamma_phi).
+    delta, weights : per-spin detunings (rad/s) and coupling weights, one
+        spin each (N <= 4 or so: the space has 2^N * n_fock states).
+    times : output times (s).
+    n_fock : number of cavity photon-number states kept.
+
+    Returns the dict of `full_hilbert` (per-spin first and pair moments in
+    the conventions of the cumulant State) plus "n_photon", the mean photon
+    number, and "p_top", the largest population of the highest kept photon
+    number over the run (small when n_fock is large enough).  Comparing with
+    `full_hilbert` for `Rates.from_params(params, ensemble)` measures the
+    error of the elimination (tests/test_spin_cavity_121.py).
+    """
+    delta = np.asarray(delta, dtype=float)
+    w = np.asarray(weights, dtype=float)
+    N = delta.size
+    if w.shape != delta.shape or N < 1:
+        raise ValueError("delta and weights must have one value per spin")
+    nf = int(n_fock)
+    if nf != n_fock or nf < 2:
+        raise ValueError(f"n_fock must be a whole number >= 2; got {n_fock}")
+    sp, sm, sz = [], [], []
+    for j in range(N):
+        ops = [qt.qeye(2)] * N + [qt.qeye(nf)]
+        ops[j] = qt.sigmap()
+        sp.append(qt.tensor(ops))
+        ops[j] = qt.sigmam()
+        sm.append(qt.tensor(ops))
+        ops[j] = qt.sigmaz()
+        sz.append(qt.tensor(ops))
+    a = qt.tensor([qt.qeye(2)] * N + [qt.destroy(nf)])
+    g = float(params.g)
+    H = -float(params.Delta) * a.dag() * a
+    for j in range(N):
+        H += 0.5 * delta[j] * sz[j] + g * w[j] * (a.dag() * sm[j] + a * sp[j])
+    nth = float(params.n_th)
+    kap = float(params.kappa)
+    c_ops = []
+    if kap > 0:
+        c_ops.append(np.sqrt(kap * (nth + 1.0)) * a)
+        if nth > 0:
+            c_ops.append(np.sqrt(kap * nth) * a.dag())
+    if params.gamma_phi > 0:
+        c_ops += [np.sqrt(params.gamma_phi / 2.0) * sz[j] for j in range(N)]
+    v = np.asarray(bloch, float)
+    theta = np.arccos(np.clip(v[2], -1, 1))
+    phi = np.arctan2(v[1], v[0])
+    single = (np.cos(theta / 2) * qt.basis(2, 0)
+              + np.exp(1j * phi) * np.sin(theta / 2) * qt.basis(2, 1)).unit()
+    spins = qt.tensor([single] * N)
+    rho0 = qt.tensor(spins * spins.dag(), qt.thermal_dm(nf, nth))
+    top = qt.tensor([qt.qeye(2)] * N + [qt.fock_dm(nf, nf - 1)])
+    e_ops = []
+    for j in range(N):
+        e_ops += [sp[j], sz[j]]
+    for j in range(N):
+        for k in range(N):
+            if j != k:
+                e_ops += [sp[j] * sm[k], sp[j] * sp[k], sz[j] * sp[k], sz[j] * sz[k]]
+    e_ops += [a.dag() * a, top]
+    res = qt.mesolve(H, rho0, times, c_ops=c_ops, e_ops=e_ops,
+                     options={"atol": 1e-11, "rtol": 1e-9, "nsteps": 1000000})
+    T = len(times)
+    out = {"s": np.zeros((T, N), complex), "z": np.zeros((T, N)),
+           "P": np.zeros((T, N, N), complex), "Q": np.zeros((T, N, N), complex),
+           "R": np.zeros((T, N, N), complex), "Z": np.zeros((T, N, N))}
+    idx = 0
+    for j in range(N):
+        out["s"][:, j] = res.expect[idx]
+        out["z"][:, j] = np.real(res.expect[idx + 1])
+        idx += 2
+    for j in range(N):
+        for k in range(N):
+            if j == k:
+                continue
+            out["P"][:, j, k] = res.expect[idx]
+            out["Q"][:, j, k] = res.expect[idx + 1]
+            out["R"][:, j, k] = res.expect[idx + 2]
+            out["Z"][:, j, k] = np.real(res.expect[idx + 3])
+            idx += 4
+    out["n_photon"] = np.real(np.asarray(res.expect[idx]))
+    out["p_top"] = float(np.max(np.real(res.expect[idx + 1])))
+    return out
+
+
 def dicke_piqs(N, chi, Gd, Gu, gamma_phi, theta, times):
     """Homogeneous ensemble (all G = 1, delta = 0) solved in the Dicke basis with PIQS.
     H = chi J+ J- (J+ = sum sigma+), collective emission Gd, collective pumping Gu,
@@ -104,7 +212,7 @@ def dicke_piqs(N, chi, Gd, Gu, gamma_phi, theta, times):
     exp(-gamma_phi t).  Initial coherent spin state at polar angle theta from +z
     (the excited state |up>; <Jz> = (N/2) cos theta at t = 0), azimuth 0 (points
     along +x for theta = pi/2).
-    Returns dict with <Jx>,<Jy>,<Jz> and the symmetrised covariance of (Jx,Jy,Jz).
+    Returns dict with <Jx>,<Jy>,<Jz> and the symmetrized covariance of (Jx,Jy,Jz).
 
     Before 1.20 gamma_phi was passed to PIQS unchanged.  With PIQS's local
     dephasing rate gamma_D each spin's coherence decays at gamma_D / 2, so the

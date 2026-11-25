@@ -11,6 +11,28 @@ so that for a uniform single-spin coupling g the usual expressions
 chi g^2 = 4 g^2 Delta / (4 Delta^2 + kappa^2) and
 Gamma_SR g^2 = 4 g^2 kappa / (4 Delta^2 + kappa^2) are recovered
 [Fukumori et al., arXiv:2604.26909, Eqs. (S8)-(S9)].
+
+Sign of Delta.  With the exchange Hamiltonian H = +chi sum g_j g_k sigma+_j
+sigma-_k used throughout the package, these formulas describe the spins and
+the cavity correctly when Delta = omega_s - omega_c, that is, Delta > 0 when
+the spins lie above the cavity.  This is checked against the full spin-cavity
+master equation, with the cavity mode kept (`cavsqueeze.exact.spin_cavity`,
+tests/test_spin_cavity_121.py): with the opposite sign the moments of two
+spins miss by 0.54.  Up to 1.20 the docstring of CavityParams
+said Delta = omega_c - omega_s, which
+would give chi the wrong sign.  The numbers have not changed.  For a line
+symmetric about the spin frequency the sign changes neither the squeezing
+parameters nor the contrast: flipping it gives the mirror image of the state
+(J_y -> -J_y).  It does set the direction of the frequency shifts and of the
+twist, and it matters for a line that is not symmetric.
+
+Thermal photons (since 1.21).  Besides the collective emission and
+absorption, the thermal photons of the cavity shift each spin's frequency
+by 2 n_th chi g_j^2 (the photon-number part of the dispersive shift; the
+vacuum part chi g_j^2 is the self term of the exchange Hamiltonian).
+`Rates.from_params` adds this shift to the class detunings.  For a uniform
+coupling it is a common shift of all spins, which changes no squeezing
+parameter and no contrast.
 """
 from __future__ import annotations
 
@@ -43,7 +65,11 @@ class CavityParams:
     g      : single-spin coupling (rad/s) at unit weight; per-class weights
              multiply it (see Ensemble).
     kappa  : total cavity linewidth (rad/s).
-    Delta  : cavity-spin detuning omega_c - omega_s (rad/s).
+    Delta  : spin-cavity detuning omega_s - omega_c (rad/s), positive when
+             the spins lie above the cavity.  (Up to 1.20 this said
+             omega_c - omega_s; the formulas below need omega_s - omega_c,
+             as the full spin-cavity model shows, see the module docstring.
+             The numbers are unchanged.)
     omega_s: spin transition frequency (rad/s), used for thermal occupation.
     T      : effective temperature of the cavity bath (K).
     gamma_phi: single-spin pure dephasing rate (rad/s), 1/T2.
@@ -121,5 +147,8 @@ def from_hz(g_hz, kappa_hz, Delta_hz, omega_s_hz=3.08385e9, T=0.0, T2=None) -> C
 def loop_gap_dispersive(N: float, T: float = 0.08, T2: float = 0.15) -> tuple[CavityParams, float]:
     """The dispersive loop-gap resonator of Fukumori et al. (arXiv:2604.26909):
     g/2pi = 15 mHz, kappa/2pi = 660 kHz, Delta/2pi = 22 MHz, T2 > 150 ms.
-    Returns (params, N)."""
+    Returns (params, N).  The paper quotes the size of the detuning; it is
+    used here as +22 MHz (spins above the cavity in this package's
+    convention), which for a symmetric line gives the same squeezing as
+    -22 MHz (see the module docstring)."""
     return from_hz(15e-3, 660e3, 22e6, T=T, T2=T2), float(N)
